@@ -352,6 +352,7 @@ typedef struct GBContext {
     uint64_t total_cycles;/**< Monotonic cycles executed, including 32-bit wraps */
     uint32_t frame_cycles;/**< Cycles this frame */
     uint32_t last_sync_cycles; /**< Last cycles count synchronized with hardware */
+    uint32_t ppu_sync_deadline;
     uint32_t run_cycle_budget; /**< Active gb_run_cycles() slice budget, or 0 when unbounded */
     uint32_t run_cycle_budget_start; /**< Cycle counter at the start of the active slice budget */
     uint8_t  frame_done;  /**< Frame is finished and rendered */
@@ -368,6 +369,7 @@ typedef struct GBContext {
     
     /* Timer internal state */
     uint16_t div_counter;   /**< Internal 16-bit divider counter */
+    uint16_t timer_cycles_until_edge;
     uint8_t tima_reload_pending; /**< TIMA reload state: 1-4 delay, 0x81-0x84 reload M-cycle */
 
     /* Lazy APU scheduler state. Pending time is flushed at the next sample

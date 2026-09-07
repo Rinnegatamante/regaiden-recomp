@@ -1006,6 +1006,7 @@ static void ppu_render_background_span(GBPPU* ppu,
                                        GBContext* ctx,
                                        uint32_t span) {
     const bool cgb_mode = ppu_is_cgb_mode(ctx);
+    const bool cgb_compat_mode = ppu_is_cgb_compat_mode(ctx);
     const bool bg_enabled = cgb_mode || (ppu->lcdc & LCDC_BG_ENABLE) != 0;
     const bool in_window = ppu->window_active_line;
     uint16_t tilemap_addr = 0;
@@ -1054,6 +1055,22 @@ static void ppu_render_background_span(GBPPU* ppu,
             ctx, tile_bank, (uint16_t)(tile_addr + pixel_y * 2u + 1u));
     }
 
+    uint16_t color_lut[4];
+    if (cgb_mode) {
+        for (uint8_t color = 0; color < 4u; ++color) {
+            color_lut[color] = read_palette_color(ppu->bg_palette_ram, palette, color);
+        }
+    } else if (cgb_compat_mode) {
+        for (uint8_t color = 0; color < 4u; ++color) {
+            color_lut[color] = read_palette_color(
+                ppu->bg_palette_ram, 0, apply_palette(color, ppu->bgp));
+        }
+    } else {
+        for (uint8_t color = 0; color < 4u; ++color) {
+            color_lut[color] = dmg_palette_rgb555[apply_palette(color, ppu->bgp)];
+        }
+    }
+
     for (uint32_t offset = 0; offset < span; ++offset) {
         uint8_t raw_color = 0;
         if (bg_enabled) {
@@ -1071,8 +1088,273 @@ static void ppu_render_background_span(GBPPU* ppu,
         ppu->framebuffer[framebuffer_index] = cgb_mode
             ? raw_color
             : apply_palette(raw_color, ppu->bgp);
-        ppu->color_framebuffer[framebuffer_index] =
-            resolve_bg_color(ppu, ctx, palette, raw_color, ppu->bgp);
+        ppu->color_framebuffer[framebuffer_index] = color_lut[raw_color];
+    }
+}
+
+typedef struct PPUCachedObjectRow {
+    int screen_x;
+    int oam_index;
+    uint8_t lo;
+    uint8_t hi;
+    uint8_t flags;
+    bool valid;
+} PPUCachedObjectRow;
+
+static uint32_t ppu_composited_sprite_span_limit(const GBPPU* ppu,
+                                                  const GBContext* ctx,
+                                                  uint32_t available_dots) {
+    if (available_dots < 2u ||
+        ppu->draw_startup != 0u ||
+        ppu->draw_stall != 0u ||
+        ppu->visible_mode != PPU_MODE_DRAW ||
+        ctx->ppu_trace_file != NULL ||
+        ppu->draw_x + 1u >= GB_SCREEN_WIDTH ||
+        ppu->visible_sprite_count == 0u) {
+        return 0u;
+    }
+
+    const int draw_x = (int)ppu->draw_x;
+    bool covered_now = false;
+    uint32_t span = available_dots;
+    const uint32_t before_final_pixel =
+        (uint32_t)GB_SCREEN_WIDTH - 1u - ppu->draw_x;
+    if (span > before_final_pixel) span = before_final_pixel;
+
+    for (uint8_t slot = 0; slot < ppu->visible_sprite_count; ++slot) {
+        const uint16_t bit = (uint16_t)(1u << slot);
+        const int screen_x = (int)ppu->visible_sprite_x[slot] - 8;
+        const int sprite_end_x = screen_x + 8;
+        const int trigger_x = screen_x < 0 ? 0 : screen_x;
+
+        if ((ppu->fetched_sprite_mask & bit) == 0u) {
+            if (trigger_x == draw_x) return 0u;
+            if (trigger_x > draw_x) {
+                const uint32_t until_trigger = (uint32_t)(trigger_x - draw_x);
+                if (until_trigger < span) span = until_trigger;
+            }
+            continue;
+        }
+
+        if (draw_x >= screen_x && draw_x < sprite_end_x) {
+            covered_now = true;
+        }
+    }
+
+    if (!covered_now) return 0u;
+
+    if (!ppu->window_active_line) {
+        const bool cgb_mode = ppu_is_cgb_mode(ctx);
+        const bool bg_visible = cgb_mode || (ppu->lcdc & LCDC_BG_ENABLE) != 0;
+        const bool window_can_start =
+            ppu->window_y_triggered &&
+            (ppu->lcdc & LCDC_WINDOW_ENABLE) != 0 &&
+            bg_visible &&
+            ppu->wx <= 166;
+        if (window_can_start) {
+            int trigger_x = (int)ppu->wx - 7;
+            if (trigger_x < 0) trigger_x = 0;
+            if (draw_x == trigger_x) return 0u;
+            if (draw_x < trigger_x) {
+                const uint32_t until_window = (uint32_t)(trigger_x - draw_x);
+                if (span > until_window) span = until_window;
+            }
+        }
+    }
+
+    const int source_x = ppu->window_active_line
+        ? ppu->window_pixel_x
+        : (ppu->draw_x + ppu->scx) & 0xFF;
+    const uint32_t until_tile_boundary = 8u - (uint32_t)(source_x & 7);
+    if (span > until_tile_boundary) span = until_tile_boundary;
+    return span >= 2u ? span : 0u;
+}
+
+static void ppu_render_composited_sprite_span(GBPPU* ppu,
+                                               GBContext* ctx,
+                                               uint32_t span) {
+    const bool cgb_mode = ppu_is_cgb_mode(ctx);
+    const bool cgb_compat_mode = ppu_is_cgb_compat_mode(ctx);
+    const bool dmg_priority = !cgb_mode || ppu->opri != 0;
+    const bool bg_enabled = cgb_mode || (ppu->lcdc & LCDC_BG_ENABLE) != 0;
+    const bool obj_enabled = (ppu->lcdc & LCDC_OBJ_ENABLE) != 0;
+    const bool in_window = ppu->window_active_line;
+    uint16_t tilemap_addr = 0;
+    int source_x = 0;
+    int source_y = 0;
+    uint8_t bg_tile_bank = 0;
+    uint8_t bg_palette = 0;
+    uint8_t bg_lo = 0;
+    uint8_t bg_hi = 0;
+    bool bg_flip_x = false;
+    bool bg_priority = false;
+
+    if (in_window) {
+        source_x = ppu->window_pixel_x;
+        source_y = ppu->window_line;
+        tilemap_addr = get_window_tilemap_addr(ppu->lcdc);
+    } else {
+        source_x = (ppu->draw_x + ppu->scx) & 0xFF;
+        source_y = (ppu->ly + ppu->scy) & 0xFF;
+        tilemap_addr = get_bg_tilemap_addr(ppu->lcdc);
+    }
+
+    if (bg_enabled) {
+        const uint8_t tile_x = (uint8_t)((source_x >> 3) & 31);
+        const uint8_t tile_y = (uint8_t)((source_y >> 3) & 31);
+        const uint16_t map_entry =
+            (uint16_t)(tilemap_addr + tile_y * 32u + tile_x);
+        const uint8_t tile_idx = vram_read_bank(ctx, 0, map_entry);
+        uint8_t pixel_y = (uint8_t)(source_y & 7);
+        uint8_t attr = 0;
+        if (cgb_mode) {
+            attr = vram_read_bank(ctx, 1, map_entry);
+            bg_palette = attr & OAM_CGB_PALETTE;
+            bg_tile_bank = (attr & OAM_CGB_BANK) ? 1u : 0u;
+            bg_flip_x = (attr & OAM_FLIP_X) != 0;
+            bg_priority = (attr & OAM_PRIORITY) != 0;
+            if (attr & OAM_FLIP_Y) pixel_y = (uint8_t)(7u - pixel_y);
+        }
+        const uint16_t tile_addr =
+            get_tile_data_addr(ppu->lcdc, tile_idx, false);
+        bg_lo = vram_read_bank(
+            ctx, bg_tile_bank, (uint16_t)(tile_addr + pixel_y * 2u));
+        bg_hi = vram_read_bank(
+            ctx, bg_tile_bank, (uint16_t)(tile_addr + pixel_y * 2u + 1u));
+    }
+
+    uint16_t bg_color_lut[4];
+    if (cgb_mode) {
+        for (uint8_t color = 0; color < 4u; ++color) {
+            bg_color_lut[color] = read_palette_color(
+                ppu->bg_palette_ram, bg_palette, color);
+        }
+    } else if (cgb_compat_mode) {
+        for (uint8_t color = 0; color < 4u; ++color) {
+            bg_color_lut[color] = read_palette_color(
+                ppu->bg_palette_ram, 0, apply_palette(color, ppu->bgp));
+        }
+    } else {
+        for (uint8_t color = 0; color < 4u; ++color) {
+            bg_color_lut[color] = dmg_palette_rgb555[apply_palette(color, ppu->bgp)];
+        }
+    }
+
+    PPUCachedObjectRow rows[10];
+    uint8_t row_count = 0;
+    if (obj_enabled) {
+        const int span_start = (int)ppu->draw_x;
+        const int span_end = span_start + (int)span;
+        for (uint8_t slot = 0; slot < ppu->visible_sprite_count; ++slot) {
+            const uint16_t bit = (uint16_t)(1u << slot);
+            if ((ppu->fetched_sprite_mask & bit) == 0u) continue;
+
+            const int screen_x = (int)ppu->visible_sprite_x[slot] - 8;
+            if (screen_x >= span_end || screen_x + 8 <= span_start) continue;
+
+            const int oam_index = ppu->visible_sprite_indices[slot];
+            const size_t oam_offset = (size_t)oam_index * 4u;
+            uint8_t tile = ctx->oam[oam_offset + 2u];
+            const uint8_t flags = ctx->oam[oam_offset + 3u];
+            int line = (int)ppu->ly -
+                ((int)ppu->visible_sprite_y[slot] - 16);
+            uint8_t bank = 0;
+            if (ppu->line_sprite_height == 16) tile &= 0xFEu;
+            if (flags & OAM_FLIP_Y) {
+                line = ppu->line_sprite_height - 1 - line;
+            }
+            if (line < 0 || line >= ppu->line_sprite_height) continue;
+            if (cgb_mode && (flags & OAM_CGB_BANK)) bank = 1u;
+
+            const uint16_t tile_addr =
+                (uint16_t)(0x8000u + tile * 16u + line * 2u);
+            PPUCachedObjectRow* row = &rows[row_count++];
+            row->screen_x = screen_x;
+            row->oam_index = oam_index;
+            row->lo = vram_read_bank(ctx, bank, tile_addr);
+            row->hi = vram_read_bank(ctx, bank, (uint16_t)(tile_addr + 1u));
+            row->flags = flags;
+            row->valid = true;
+        }
+    }
+
+    for (uint32_t offset = 0; offset < span; ++offset) {
+        const int x = (int)ppu->draw_x + (int)offset;
+        uint8_t bg_raw = 0;
+        if (bg_enabled) {
+            uint8_t pixel_x = (uint8_t)((source_x + (int)offset) & 7);
+            if (bg_flip_x) pixel_x = (uint8_t)(7u - pixel_x);
+            const uint8_t bit = (uint8_t)(7u - pixel_x);
+            bg_raw = (uint8_t)(((bg_lo >> bit) & 1u) |
+                               (((bg_hi >> bit) & 1u) << 1u));
+        }
+
+        bool obj_present = false;
+        uint8_t obj_raw = 0;
+        uint8_t obj_palette = 0;
+        bool obj_behind_bg = false;
+        int chosen_x = 256;
+        int chosen_index = 256;
+
+        for (uint8_t row_index = 0; row_index < row_count; ++row_index) {
+            const PPUCachedObjectRow* row = &rows[row_index];
+            if (!row->valid) continue;
+            const int sprite_pixel = x - row->screen_x;
+            if (sprite_pixel < 0 || sprite_pixel >= 8) continue;
+            const int bit = (row->flags & OAM_FLIP_X)
+                ? sprite_pixel
+                : (7 - sprite_pixel);
+            const uint8_t raw = (uint8_t)(((row->lo >> bit) & 1u) |
+                                          (((row->hi >> bit) & 1u) << 1u));
+            if (raw == 0u) continue;
+
+            bool wins = !obj_present;
+            if (!wins && dmg_priority) {
+                wins = row->screen_x < chosen_x ||
+                       (row->screen_x == chosen_x &&
+                        row->oam_index < chosen_index);
+            } else if (!wins) {
+                wins = row->oam_index < chosen_index;
+            }
+            if (!wins) continue;
+
+            obj_present = true;
+            obj_raw = raw;
+            obj_palette = cgb_mode
+                ? (row->flags & OAM_CGB_PALETTE)
+                : ((row->flags & OAM_PALETTE) ? 1u : 0u);
+            obj_behind_bg = (row->flags & OAM_PRIORITY) != 0;
+            chosen_x = row->screen_x;
+            chosen_index = row->oam_index;
+        }
+
+        bool use_object = obj_present;
+        if (use_object && bg_raw != 0u) {
+            if (cgb_mode) {
+                if ((ppu->lcdc & LCDC_BG_ENABLE) &&
+                    (bg_priority || obj_behind_bg)) {
+                    use_object = false;
+                }
+            } else if (obj_behind_bg) {
+                use_object = false;
+            }
+        }
+
+        const size_t framebuffer_index =
+            (size_t)ppu->ly * GB_SCREEN_WIDTH + (size_t)x;
+        if (use_object) {
+            const uint8_t palette_reg = obj_palette ? ppu->obp1 : ppu->obp0;
+            ppu->framebuffer[framebuffer_index] = cgb_mode
+                ? obj_raw
+                : apply_palette(obj_raw, palette_reg);
+            ppu->color_framebuffer[framebuffer_index] =
+                resolve_obj_color(ppu, ctx, obj_palette, obj_raw, palette_reg);
+        } else {
+            ppu->framebuffer[framebuffer_index] = cgb_mode
+                ? bg_raw
+                : apply_palette(bg_raw, ppu->bgp);
+            ppu->color_framebuffer[framebuffer_index] = bg_color_lut[bg_raw];
+        }
     }
 }
 
@@ -1178,30 +1460,61 @@ static unsigned ppu_begin_object_fetches(GBPPU* ppu, const GBContext* ctx) {
     return penalty;
 }
 
-static uint32_t ppu_draw_stable_span(GBPPU* ppu,
-                                     GBContext* ctx,
-                                     uint32_t available_dots) {
+static uint32_t ppu_sprite_free_span_limit(const GBPPU* ppu,
+                                           uint32_t available_dots) {
+    uint32_t span = available_dots;
+    const int draw_x = (int)ppu->draw_x;
+
+    for (uint8_t slot = 0; slot < ppu->visible_sprite_count; ++slot) {
+        const uint16_t bit = (uint16_t)(1u << slot);
+        const int screen_x = (int)ppu->visible_sprite_x[slot] - 8;
+        const int trigger_x = screen_x < 0 ? 0 : screen_x;
+
+        if ((ppu->fetched_sprite_mask & bit) == 0u) {
+            if (trigger_x == draw_x) return 0u;
+            if (trigger_x > draw_x) {
+                const uint32_t until_trigger = (uint32_t)(trigger_x - draw_x);
+                if (until_trigger < span) span = until_trigger;
+            }
+            continue;
+        }
+
+        const int sprite_end_x = screen_x + 8;
+        if (draw_x >= screen_x && draw_x < sprite_end_x) return 0u;
+        if (screen_x > draw_x) {
+            const uint32_t until_sprite = (uint32_t)(screen_x - draw_x);
+            if (until_sprite < span) span = until_sprite;
+        }
+    }
+
+    return span;
+}
+
+static uint32_t ppu_draw_stable_span_limit(const GBPPU* ppu,
+                                           const GBContext* ctx,
+                                           uint32_t available_dots) {
     if (available_dots < 2u ||
         ppu->draw_startup != 0u ||
         ppu->draw_stall != 0u ||
         ppu->visible_mode != PPU_MODE_DRAW ||
-        ppu->visible_sprite_count != 0u ||
         ctx->ppu_trace_file != NULL ||
         ppu->draw_x + 1u >= GB_SCREEN_WIDTH) {
-        return 0;
+        return 0u;
     }
 
     uint32_t span = available_dots;
     const uint32_t before_final_pixel =
         (uint32_t)GB_SCREEN_WIDTH - 1u - ppu->draw_x;
-    if (span > before_final_pixel) {
-        span = before_final_pixel;
+    if (span > before_final_pixel) span = before_final_pixel;
+
+    if (ppu->visible_sprite_count != 0u) {
+        span = ppu_sprite_free_span_limit(ppu, span);
+        if (span < 2u) return 0u;
     }
 
     if (!ppu->window_active_line) {
         const bool cgb_mode = ppu_is_cgb_mode(ctx);
-        const bool bg_visible =
-            cgb_mode || (ppu->lcdc & LCDC_BG_ENABLE) != 0;
+        const bool bg_visible = cgb_mode || (ppu->lcdc & LCDC_BG_ENABLE) != 0;
         const bool window_can_start =
             ppu->window_y_triggered &&
             (ppu->lcdc & LCDC_WINDOW_ENABLE) != 0 &&
@@ -1209,18 +1522,12 @@ static uint32_t ppu_draw_stable_span(GBPPU* ppu,
             ppu->wx <= 166;
         if (window_can_start) {
             int trigger_x = (int)ppu->wx - 7;
-            if (trigger_x < 0) {
-                trigger_x = 0;
-            }
-            if ((int)ppu->draw_x == trigger_x) {
-                return 0;
-            }
+            if (trigger_x < 0) trigger_x = 0;
+            if ((int)ppu->draw_x == trigger_x) return 0u;
             if ((int)ppu->draw_x < trigger_x) {
                 const uint32_t until_window =
                     (uint32_t)(trigger_x - (int)ppu->draw_x);
-                if (span > until_window) {
-                    span = until_window;
-                }
+                if (span > until_window) span = until_window;
             }
         }
     }
@@ -1228,14 +1535,62 @@ static uint32_t ppu_draw_stable_span(GBPPU* ppu,
     const int source_x = ppu->window_active_line
         ? ppu->window_pixel_x
         : (ppu->draw_x + ppu->scx) & 0xFF;
-    const uint32_t until_tile_boundary =
-        8u - (uint32_t)(source_x & 7);
-    if (span > until_tile_boundary) {
-        span = until_tile_boundary;
+    const uint32_t until_tile_boundary = 8u - (uint32_t)(source_x & 7);
+    if (span > until_tile_boundary) span = until_tile_boundary;
+    return span < 2u ? 0u : span;
+}
+
+static uint32_t ppu_draw_sync_span_limit(const GBPPU* ppu,
+                                         const GBContext* ctx,
+                                         uint32_t available_dots) {
+    if (available_dots < 2u ||
+        ppu->draw_startup != 0u ||
+        ppu->draw_stall != 0u ||
+        ppu->visible_mode != PPU_MODE_DRAW ||
+        ctx->ppu_trace_file != NULL ||
+        ppu->draw_x + 1u >= GB_SCREEN_WIDTH) {
+        return 0u;
     }
-    if (span < 2u) {
-        return 0;
+
+    uint32_t span = available_dots;
+    const uint32_t before_final_pixel =
+        (uint32_t)GB_SCREEN_WIDTH - 1u - ppu->draw_x;
+    if (span > before_final_pixel) span = before_final_pixel;
+
+    if (ppu->visible_sprite_count != 0u) {
+        span = ppu_sprite_free_span_limit(ppu, span);
+        if (span < 2u) return 0u;
     }
+
+    if (!ppu->window_active_line) {
+        const bool cgb_mode = ppu_is_cgb_mode(ctx);
+        const bool bg_visible = cgb_mode || (ppu->lcdc & LCDC_BG_ENABLE) != 0;
+        const bool window_can_start =
+            ppu->window_y_triggered &&
+            (ppu->lcdc & LCDC_WINDOW_ENABLE) != 0 &&
+            bg_visible &&
+            ppu->wx <= 166;
+        if (window_can_start) {
+            int trigger_x = (int)ppu->wx - 7;
+            if (trigger_x < 0) trigger_x = 0;
+            if ((int)ppu->draw_x == trigger_x) return 0u;
+            if ((int)ppu->draw_x < trigger_x) {
+                const uint32_t until_window =
+                    (uint32_t)(trigger_x - (int)ppu->draw_x);
+                if (span > until_window) span = until_window;
+            }
+        }
+    }
+
+    return span < 2u ? 0u : span;
+}
+
+static uint32_t ppu_draw_stable_span(GBPPU* ppu,
+                                     GBContext* ctx,
+                                     uint32_t available_dots) {
+    const uint32_t span =
+        ppu_draw_stable_span_limit(ppu, ctx, available_dots);
+    if (span == 0u) return 0u;
 
     ppu_render_background_span(ppu, ctx, span);
     ppu->draw_x = (uint16_t)(ppu->draw_x + span);
@@ -1477,6 +1832,28 @@ void ppu_tick(GBPPU* ppu, GBContext* ctx, uint32_t cycles) {
             }
 
             case PPU_MODE_DRAW: {
+                if (ppu->draw_startup != 0u || ppu->draw_stall != 0u) {
+                    uint8_t* const delay = ppu->draw_startup != 0u
+                        ? &ppu->draw_startup
+                        : &ppu->draw_stall;
+                    uint32_t step = cycles < (uint32_t)*delay
+                        ? cycles
+                        : (uint32_t)*delay;
+                    if (ppu->visible_mode != PPU_MODE_DRAW &&
+                        ppu->mode_cycles < 3u) {
+                        const uint32_t until_visible = 3u - ppu->mode_cycles;
+                        if (step > until_visible) step = until_visible;
+                    }
+                    ppu->mode_cycles = (uint16_t)(ppu->mode_cycles + step);
+                    cycles -= step;
+                    *delay = (uint8_t)((uint32_t)*delay - step);
+                    if (ppu->visible_mode != PPU_MODE_DRAW &&
+                        ppu->mode_cycles >= 3u) {
+                        ppu->visible_mode = PPU_MODE_DRAW;
+                        update_stat(ppu, ctx);
+                    }
+                    break;
+                }
 #ifndef GBRT_DISABLE_PPU_STABLE_SPANS
                 const uint32_t stable_span =
                     ppu_draw_stable_span(ppu, ctx, cycles);
@@ -1486,6 +1863,24 @@ void ppu_tick(GBPPU* ppu, GBContext* ctx, uint32_t cycles) {
                     cycles -= stable_span;
                     gbrt_note_ppu_draw_span(ctx, stable_span);
                     gbrt_note_ppu_stable_span(ctx, stable_span);
+                    break;
+                }
+#endif
+
+#ifndef GBRT_DISABLE_PPU_STABLE_SPANS
+                const uint32_t sprite_span =
+                    ppu_composited_sprite_span_limit(ppu, ctx, cycles);
+                if (sprite_span > 0u) {
+                    ppu_render_composited_sprite_span(ppu, ctx, sprite_span);
+                    ppu->draw_x = (uint16_t)(ppu->draw_x + sprite_span);
+                    if (ppu->window_active_line) {
+                        ppu->window_pixel_x =
+                            (uint16_t)(ppu->window_pixel_x + sprite_span);
+                    }
+                    ppu->mode_cycles =
+                        (uint16_t)(ppu->mode_cycles + sprite_span);
+                    cycles -= sprite_span;
+                    gbrt_note_ppu_draw_span(ctx, sprite_span);
                     break;
                 }
 #endif
@@ -1756,10 +2151,27 @@ uint32_t ppu_cycles_until_next_event(const GBPPU* ppu,
                 : 0u;
         }
 
-        case PPU_MODE_DRAW:
-            /* Mode 3 completion and early visible-mode publication are driven
-             * by the FIFO one dot at a time. */
-            return 1u;
+        case PPU_MODE_DRAW: {
+            uint32_t deadline = UINT32_MAX;
+            if (ppu->visible_mode != PPU_MODE_DRAW && ppu->mode_cycles < 3u) {
+                deadline = 3u - ppu->mode_cycles;
+            }
+            if (ppu->draw_startup != 0u && ppu->draw_startup < deadline) {
+                deadline = ppu->draw_startup;
+            } else if (ppu->draw_stall != 0u && ppu->draw_stall < deadline) {
+                deadline = ppu->draw_stall;
+            }
+#ifndef GBRT_DISABLE_PPU_STABLE_SPANS
+            if (ppu->draw_startup == 0u && ppu->draw_stall == 0u) {
+                const uint32_t stable_span =
+                    ppu_draw_sync_span_limit(ppu, ctx, GB_SCREEN_WIDTH);
+                if (stable_span != 0u && stable_span < deadline) {
+                    deadline = stable_span;
+                }
+            }
+#endif
+            return deadline == UINT32_MAX ? 1u : deadline;
+        }
 
         case PPU_MODE_HBLANK: {
             if (ppu->visible_mode == PPU_MODE_DRAW &&
@@ -1843,6 +2255,7 @@ uint8_t ppu_read_register(GBPPU* ppu, uint16_t addr) {
 }
 
 void ppu_write_register(GBPPU* ppu, GBContext* ctx, uint16_t addr, uint8_t value) {
+    if (ctx) ctx->ppu_sync_deadline = 0u;
     static int ppu_write_count = 0;
     uint8_t old_value;
 

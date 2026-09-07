@@ -1036,6 +1036,7 @@ static void gbrt_restore_core_state(GBContext* ctx, const GBSavestateCoreState* 
     ctx->frame_first_fallback_addr = state->frame_first_fallback_addr;
     ctx->frame_last_fallback_addr = state->frame_last_fallback_addr;
     ctx->div_counter = state->div_counter;
+    ctx->timer_cycles_until_edge = 0u;
     ctx->tima_reload_pending = state->tima_reload_pending;
     memcpy(&ctx->dma, &state->dma, sizeof(ctx->dma));
     memcpy(&ctx->hdma, &state->hdma, sizeof(ctx->hdma));
@@ -1218,6 +1219,8 @@ void gb_context_reset(GBContext* ctx, bool skip_bootrom) {
     ctx->audio_pending_old_div = 0u;
     ctx->audio_pending_system_cycle_remainder = 0u;
     ctx->audio_pending_double_speed = 0u;
+    ctx->ppu_sync_deadline = 0u;
+    ctx->timer_cycles_until_edge = 0u;
     memset(&ctx->serial_transfer, 0, sizeof(ctx->serial_transfer));
     ctx->last_joypad = 0xFF;
     ctx->used_dispatch_fallback = 0;
@@ -1909,6 +1912,7 @@ static void gb_hdma_copy_block(GBContext* ctx) {
         if (dest >= 0x8000 && dest < 0xA000) {
             ctx->vram[(ctx->vram_bank * VRAM_SIZE) + (dest - 0x8000)] =
                 gb_direct_read_dma_source(ctx, src);
+            ctx->ppu_sync_deadline = 0u;
         }
     }
 
@@ -2184,12 +2188,50 @@ static void gb_timer_tick_arithmetic(GBContext* ctx, uint32_t cpu_cycles) {
     ctx->io[0x04] = (uint8_t)(ctx->div_counter >> 8);
 }
 
+static inline uint16_t gb_timer_cycles_to_next_edge(const GBContext* ctx,
+                                                     uint8_t tac) {
+    const uint16_t period = (uint16_t)(gb_timer_mask(tac) << 1u);
+    const uint16_t phase = (uint16_t)(ctx->div_counter & (period - 1u));
+    return (uint16_t)(period - phase);
+}
+
 static void gb_timer_tick(GBContext* ctx, uint32_t cpu_cycles) {
     if (gbrt_force_scalar_timer) {
+        ctx->timer_cycles_until_edge = 0u;
         gb_timer_tick_scalar(ctx, cpu_cycles);
         return;
     }
+    if (cpu_cycles == 0u) return;
+    if (ctx->tima_reload_pending != 0u) {
+        ctx->timer_cycles_until_edge = 0u;
+        gb_timer_tick_arithmetic(ctx, cpu_cycles);
+        if (ctx->tima_reload_pending == 0u && (ctx->io[0x07] & 0x04u)) {
+            ctx->timer_cycles_until_edge =
+                gb_timer_cycles_to_next_edge(ctx, ctx->io[0x07]);
+        }
+        return;
+    }
+    const uint8_t tac = ctx->io[0x07];
+    if ((tac & 0x04u) == 0u) {
+        ctx->div_counter = (uint16_t)(ctx->div_counter + cpu_cycles);
+        ctx->io[0x04] = (uint8_t)(ctx->div_counter >> 8);
+        ctx->timer_cycles_until_edge = 0u;
+        return;
+    }
+    uint16_t until_edge = ctx->timer_cycles_until_edge;
+    if (until_edge == 0u) until_edge = gb_timer_cycles_to_next_edge(ctx, tac);
+    if (cpu_cycles < until_edge) {
+        ctx->div_counter = (uint16_t)(ctx->div_counter + cpu_cycles);
+        ctx->io[0x04] = (uint8_t)(ctx->div_counter >> 8);
+        ctx->timer_cycles_until_edge = (uint16_t)(until_edge - cpu_cycles);
+        return;
+    }
+    ctx->timer_cycles_until_edge = 0u;
     gb_timer_tick_arithmetic(ctx, cpu_cycles);
+    if (ctx->tima_reload_pending == 0u && (ctx->io[0x07] & 0x04u)) {
+        ctx->timer_cycles_until_edge =
+            gb_timer_cycles_to_next_edge(ctx, ctx->io[0x07]);
+    }
 }
 
 static uint32_t gbrt_min_deadline(uint32_t current, uint32_t candidate) {
@@ -2225,9 +2267,10 @@ uint32_t gbrt_cycles_until_next_event(const GBContext* ctx) {
     if (ctx->tima_reload_pending) {
         deadline = gbrt_min_deadline(deadline, 1u);
     } else if (ctx->io[0x07] & 0x04u) {
-        const uint32_t period = (uint32_t)gb_timer_mask(ctx->io[0x07]) << 1u;
-        const uint32_t phase = ctx->div_counter & (period - 1u);
-        deadline = gbrt_min_deadline(deadline, period - phase);
+        const uint32_t timer_deadline = ctx->timer_cycles_until_edge != 0u
+            ? ctx->timer_cycles_until_edge
+            : gb_timer_cycles_to_next_edge(ctx, ctx->io[0x07]);
+        deadline = gbrt_min_deadline(deadline, timer_deadline);
     }
 
     if (ctx->ppu) {
@@ -2447,6 +2490,7 @@ static void gb_timer_write_div(GBContext* ctx) {
     const uint16_t old_div = ctx->div_counter;
     const bool old_input = gb_timer_input(ctx, ctx->io[0x07]);
     ctx->div_counter = 0;
+    ctx->timer_cycles_until_edge = 0u;
     ctx->io[0x04] = 0;
     if (ctx->apu) {
         gb_audio_div_reset(ctx->apu, old_div, ctx->cgb_double_speed != 0);
@@ -2548,6 +2592,7 @@ static void gb_timer_write_tac(GBContext* ctx, uint8_t value) {
         gb_timer_increment(ctx);
     }
     ctx->io[0x07] = value;
+    ctx->timer_cycles_until_edge = 0u;
 }
 
 static bool gb_ppu_blocks_cpu_oam_read(const GBContext* ctx) {
@@ -3062,7 +3107,9 @@ static void gbrt_write8_impl(GBContext* ctx,
         }
         if (addr == 0xFF6C) {
             if (gb_is_cgb_mode(ctx) && ctx->ppu) {
+                gb_sync(ctx);
                 ((GBPPU*)ctx->ppu)->opri = value & 0x01;
+                ctx->ppu_sync_deadline = 0u;
                 ctx->io[0x6C] = (uint8_t)(0xFE | (((GBPPU*)ctx->ppu)->opri & 0x01));
             }
             return;
@@ -3097,6 +3144,7 @@ static void gbrt_write8_impl(GBContext* ctx,
             return;
         }
         if ((addr >= 0xFF40 && addr <= 0xFF4B) || (addr >= 0xFF68 && addr <= 0xFF6B)) {
+            gb_sync(ctx);
             ppu_write_register((GBPPU*)ctx->ppu, ctx, addr, value);
             return;
         }
@@ -4863,12 +4911,14 @@ void gbrt_note_lcd_transition(GBContext* ctx, bool lcd_enabled, uint8_t old_lcdc
  * ========================================================================== */
 
 static inline void gb_sync(GBContext* ctx) {
+    ctx->ppu_sync_deadline = 0u;
     while (1) {
         uint32_t current = ctx->cycles;
         uint32_t delta = current - ctx->last_sync_cycles;
         if (delta > 0) {
             ctx->last_sync_cycles = current;
             if (ctx->ppu) ppu_tick((GBPPU*)ctx->ppu, ctx, delta);
+            ctx->ppu_sync_deadline = 0u;
         }
 
         if (ctx->hdma.cpu_stall_cycles > 0 &&
@@ -4882,6 +4932,20 @@ static inline void gb_sync(GBContext* ctx) {
         }
         break;
     }
+}
+
+static inline bool gb_ppu_sync_due(GBContext* ctx) {
+    if (!ctx->ppu) return false;
+    const uint32_t pending = ctx->cycles - ctx->last_sync_cycles;
+    if (pending == 0u) return false;
+    uint32_t deadline = ctx->ppu_sync_deadline;
+    if (deadline == 0u) {
+        deadline = ppu_cycles_until_next_event((const GBPPU*)ctx->ppu, ctx);
+        if (deadline != 0u && deadline != UINT32_MAX) {
+            ctx->ppu_sync_deadline = deadline;
+        }
+    }
+    return deadline != UINT32_MAX && pending >= deadline;
 }
 
 void gb_add_cycles(GBContext* ctx, uint32_t cycles) {
@@ -4953,6 +5017,7 @@ static void gb_dma_advance_active(GBContext* ctx, uint32_t cycles) {
              * retaining mapper/bank/bounds behavior. */
             uint8_t byte = gb_direct_read_oam_dma_source(ctx, src_addr);
             ctx->oam[ctx->dma.progress] = byte;
+            ctx->ppu_sync_deadline = 0u;
             ctx->dma.progress++;
         }
         
@@ -5289,12 +5354,7 @@ void gb_tick(GBContext* ctx, uint32_t cycles) {
 #endif
     gb_timer_tick(ctx, cpu_cycles);
     
-    /* The reference execution path must publish PPU mode/LY/STAT events at
-     * every CPU instruction boundary.  Deferring this to a 256-cycle bucket
-     * makes HALT-based STAT waits resume on the wrong scanline even though the
-     * PPU itself models the correct dot.  Benchmark mode retains its explicit
-     * coarse-sync path above; normal and headless execution stay accurate. */
-    if (system_cycles > 0) {
+    if (system_cycles > 0 && gb_ppu_sync_due(ctx)) {
         gb_sync(ctx);
     }
     /* Interrupt acceptance is a CPU instruction-boundary concern. In CGB
