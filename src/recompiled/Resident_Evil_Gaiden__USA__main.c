@@ -13,6 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__VITA__)
+#include <psp2/types.h>
+const SceSize sceUserMainThreadStackSize = 4 * 1024 * 1024;
+#endif
 #ifdef _WIN32
 #include <io.h>
 #define GB_DUP2 _dup2
@@ -31,11 +35,19 @@ static bool gb_redirect_logs(const char* path) {
         fprintf(stderr, "Failed to open log file '%s' for stdout redirection\n", path);
         return false;
     }
+#if defined(__VITA__)
+    if (!freopen(path, "a", stderr)) {
+        fprintf(stdout, "Failed to open log file '%s' for stderr redirection\n", path);
+        fflush(stdout);
+        return false;
+    }
+#else
     if (GB_DUP2(GB_FILENO(stdout), GB_FILENO(stderr)) < 0) {
         fprintf(stdout, "Failed to open log file '%s' for stderr redirection\n", path);
         fflush(stdout);
         return false;
     }
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     fprintf(stderr, "[LOG] Redirecting runtime output to %s\n", path);
@@ -711,7 +723,12 @@ int Resident_Evil_Gaiden__USA__main(int argc, char* argv[]) {
         ctx->stopped = 0;
         while (!ctx->frame_done) {
             bool smooth_lcd_transitions = gb_platform_get_smooth_lcd_transitions();
+#if defined(__VITA__)
+            smooth_lcd_transitions = false;
+            uint32_t slice_budget = lcd_smooth_slice_cycles;
+#else
             uint32_t slice_budget = smooth_lcd_transitions ? lcd_smooth_slice_cycles : 0xFFFFFFFFu;
+#endif
             uint32_t slice_start_cycles = ctx->frame_cycles;
             double slice_start_ms = gb_profile_now_ms();
             gb_run_cycles(ctx, slice_budget);

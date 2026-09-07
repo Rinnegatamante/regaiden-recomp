@@ -17,6 +17,10 @@ uint8_t* g_rom_data = NULL;
 size_t g_rom_size = 0;
 
 static const char* s_candidate_paths[] = {
+#if defined(__VITA__)
+    "ux0:/data/regaiden/Resident Evil Gaiden (USA).gbc",
+    "ux0:/data/regaiden/rom.gbc",
+#else
     "Resident Evil Gaiden (USA).gbc",
     "rom.gbc",
     "rom/Resident Evil Gaiden (USA).gbc",
@@ -28,6 +32,7 @@ static const char* s_candidate_paths[] = {
     "/sdcard/ROMs/GBC/rom.gbc",
     "/sdcard/Download/Resident Evil Gaiden (USA).gbc",
     "/sdcard/Resident Evil Gaiden (USA).gbc",
+#endif
     NULL
 };
 

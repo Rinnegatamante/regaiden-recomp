@@ -55,6 +55,11 @@
 
 namespace fs = std::filesystem;
 
+#if defined(__VITA__)
+#define REGAIDEN_VITA_DISPLAY_WIDTH 960
+#define REGAIDEN_VITA_DISPLAY_HEIGHT 544
+#endif
+
 /* ============================================================================
  * SDL State
  * ========================================================================== */
@@ -350,7 +355,7 @@ static bool env_flag_enabled(const char* name) {
 }
 
 static bool platform_default_fullscreen(void) {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__VITA__)
     return true;
 #else
     return false;
@@ -358,7 +363,7 @@ static bool platform_default_fullscreen(void) {
 }
 
 static bool platform_uses_app_storage_for_relative_paths(void) {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__VITA__)
     return true;
 #else
     return false;
@@ -954,6 +959,26 @@ static void set_default_audio_preferences(void) {
     g_audio_target_device_name.clear();
 }
 
+#if defined(__VITA__)
+static void apply_vita_shortcut_bindings(void) {
+    g_controller_bindings[GB_INPUT_ACTION_A][0] =
+        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_A);
+    g_controller_bindings[GB_INPUT_ACTION_B][0] =
+        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_B);
+    g_controller_bindings[GB_INPUT_ACTION_A][1] = {};
+    g_controller_bindings[GB_INPUT_ACTION_B][1] = {};
+    g_controller_bindings[GB_INPUT_ACTION_SAVE_STATE][0] =
+        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+    g_controller_bindings[GB_INPUT_ACTION_SAVE_STATE][1] = {};
+    g_controller_bindings[GB_INPUT_ACTION_LOAD_STATE][0] =
+        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+    g_controller_bindings[GB_INPUT_ACTION_LOAD_STATE][1] = {};
+    g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][0] =
+        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_Y);
+    g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][1] = {};
+}
+#endif
+
 static void set_default_input_bindings(void) {
     memset(g_keyboard_bindings, 0, sizeof(g_keyboard_bindings));
     memset(g_controller_bindings, 0, sizeof(g_controller_bindings));
@@ -1005,6 +1030,9 @@ static void set_default_input_bindings(void) {
     g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_LEFTSTICK);
     g_controller_bindings[GB_INPUT_ACTION_TOGGLE_PORT_UI][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSTICK);
 
+#if defined(__VITA__)
+    apply_vita_shortcut_bindings();
+#endif
     clear_all_binding_pressed_state();
 }
 
@@ -1019,6 +1047,8 @@ static std::string platform_external_asset_root(void) {
     if (external && external[0]) {
         return std::string(external);
     }
+#elif defined(__VITA__)
+    return make_pref_storage_dir("runtime");
 #endif
     return std::string();
 }
@@ -1270,6 +1300,9 @@ static void load_runtime_preferences(void) {
         g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][1] =
             make_binding(GB_INPUT_BINDING_NONE, 0);
     }
+#if defined(__VITA__)
+    apply_vita_shortcut_bindings();
+#endif
     update_effective_joypad_state();
 }
 
@@ -1953,7 +1986,14 @@ static void update_game_viewport(void) {
 
     int window_w = 0;
     int window_h = 0;
+#if defined(__VITA__)
+    if (!g_renderer || SDL_GetRendererOutputSize(g_renderer, &window_w, &window_h) != 0) {
+        window_w = REGAIDEN_VITA_DISPLAY_WIDTH;
+        window_h = REGAIDEN_VITA_DISPLAY_HEIGHT;
+    }
+#else
     SDL_GetWindowSize(g_window, &window_w, &window_h);
+#endif
     if (window_w <= 0) window_w = target_w;
     if (window_h <= 0) window_h = target_h;
 
@@ -2317,6 +2357,48 @@ static void ensure_lcd_off_framebuffer(void) {
     g_lcd_off_framebuffer_initialized = true;
 }
 
+static void prepare_guest_frame(const uint32_t* framebuffer) {
+    g_frame_count++;
+    memcpy(g_last_guest_framebuffer, framebuffer, sizeof(g_last_guest_framebuffer));
+    g_last_guest_framebuffer_valid = true;
+
+    if (frame_is_selected_for_dump(g_snapshot_frames, g_snapshot_frame_count, (uint32_t)g_frame_count)) {
+        char frame_label[32];
+        snprintf(frame_label, sizeof(frame_label), "frame-%d", g_frame_count);
+        capture_guest_snapshot(frame_label);
+    }
+
+    if (frame_is_selected_for_dump(g_dump_frames, g_dump_count, (uint32_t)g_frame_count)) {
+        char suffix[32];
+        snprintf(suffix, sizeof(suffix), "_%05d.ppm", g_frame_count);
+        const std::string filename = g_screenshot_prefix + suffix;
+        save_ppm(filename.c_str(), framebuffer, GB_SCREEN_WIDTH, GB_SCREEN_HEIGHT, g_frame_count);
+    }
+
+    if (g_registered_ctx) {
+        cheats_apply_frame(g_registered_ctx);
+    }
+
+    if (g_registered_ctx && g_music_pack_config.enabled) {
+        static int s_last_music_id = -1;
+        static int s_music_id_stable_frames = 0;
+        const int music_id = gb_state_music_track(g_registered_ctx);
+
+        if (music_id == s_last_music_id) {
+            if (s_music_id_stable_frames < MUSIC_ID_DEBOUNCE_FRAMES) {
+                s_music_id_stable_frames++;
+            }
+        } else {
+            s_last_music_id = music_id;
+            s_music_id_stable_frames = 0;
+        }
+
+        if (s_music_id_stable_frames == MUSIC_ID_DEBOUNCE_FRAMES) {
+            music_pack_request_track(music_id);
+        }
+    }
+}
+
 static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_frame) {
     if (!framebuffer) {
         DBG_FRAME("Platform render_frame: SKIPPED (null: texture=%d, renderer=%d, fb=%d)",
@@ -2325,25 +2407,7 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
     }
     g_present_count++;
     if (count_guest_frame) {
-        g_frame_count++;
-        memcpy(g_last_guest_framebuffer, framebuffer, sizeof(g_last_guest_framebuffer));
-        g_last_guest_framebuffer_valid = true;
-    }
-
-    if (count_guest_frame) {
-        /* Handle Screenshot Dumping */
-        if (frame_is_selected_for_dump(g_snapshot_frames, g_snapshot_frame_count, (uint32_t)g_frame_count)) {
-            char frame_label[32];
-            snprintf(frame_label, sizeof(frame_label), "frame-%d", g_frame_count);
-            capture_guest_snapshot(frame_label);
-        }
-
-        if (frame_is_selected_for_dump(g_dump_frames, g_dump_count, (uint32_t)g_frame_count)) {
-            char suffix[32];
-            snprintf(suffix, sizeof(suffix), "_%05d.ppm", g_frame_count);
-            const std::string filename = g_screenshot_prefix + suffix;
-            save_ppm(filename.c_str(), framebuffer, GB_SCREEN_WIDTH, GB_SCREEN_HEIGHT, g_frame_count);
-        }
+        prepare_guest_frame(framebuffer);
     }
 
     if (frame_is_selected_for_dump(g_dump_present_frames, g_dump_present_count, (uint32_t)g_frame_count)) {
@@ -2415,36 +2479,6 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
                      g_frame_count);
         }
         SDL_SetWindowTitle(g_window, title);
-    }
-
-    /* Apply active cheats every frame */
-    if (g_registered_ctx) {
-        cheats_apply_frame(g_registered_ctx);
-    }
-
-    /*
-     * Follow the game's own music selection so replacement tracks change when
-     * the original score does. The id dips briefly between pieces, which would
-     * restart the replacement track from the top, so only act on a value that
-     * has held steady for a few frames. No-op unless the pack is enabled.
-     */
-    if (count_guest_frame && g_registered_ctx && g_music_pack_config.enabled) {
-        static int s_last_music_id = -1;
-        static int s_music_id_stable_frames = 0;
-        const int music_id = gb_state_music_track(g_registered_ctx);
-
-        if (music_id == s_last_music_id) {
-            if (s_music_id_stable_frames < MUSIC_ID_DEBOUNCE_FRAMES) {
-                s_music_id_stable_frames++;
-            }
-        } else {
-            s_last_music_id = music_id;
-            s_music_id_stable_frames = 0;
-        }
-
-        if (s_music_id_stable_frames == MUSIC_ID_DEBOUNCE_FRAMES) {
-            music_pack_request_track(music_id);
-        }
     }
 
     /* Render widescreen or native frame */
@@ -3174,11 +3208,229 @@ upload_processed_frame:
     g_timing_render_total += g_last_timing.total_render_ms;
 }
 
+#if defined(__VITA__)
+enum VitaAsyncRenderSlotState {
+    VITA_ASYNC_SLOT_FREE = 0,
+    VITA_ASYNC_SLOT_READY,
+    VITA_ASYNC_SLOT_RENDERING,
+};
+
+struct VitaAsyncRenderSlot {
+    uint32_t framebuffer[GB_FRAMEBUFFER_SIZE];
+    uint32_t frame_number;
+    uint64_t sequence;
+    VitaAsyncRenderSlotState state;
+};
+
+static const int VITA_ASYNC_RENDER_SLOT_COUNT = 2;
+static VitaAsyncRenderSlot g_vita_async_render_slots[VITA_ASYNC_RENDER_SLOT_COUNT] = {};
+static SDL_Thread* g_vita_async_render_thread = NULL;
+static SDL_mutex* g_vita_async_render_mutex = NULL;
+static SDL_cond* g_vita_async_render_work_cond = NULL;
+static SDL_cond* g_vita_async_render_free_cond = NULL;
+static bool g_vita_async_render_stop = false;
+static uint64_t g_vita_async_render_next_sequence = 1;
+static GBPlatformTimingInfo g_vita_async_last_render_timing = {};
+
+static bool vita_async_render_all_slots_free(void) {
+    for (int i = 0; i < VITA_ASYNC_RENDER_SLOT_COUNT; ++i) {
+        if (g_vita_async_render_slots[i].state != VITA_ASYNC_SLOT_FREE) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int vita_async_render_worker(void*) {
+    for (;;) {
+        SDL_LockMutex(g_vita_async_render_mutex);
+        int slot_index = -1;
+        while (!g_vita_async_render_stop && slot_index < 0) {
+            uint64_t best_sequence = UINT64_MAX;
+            for (int i = 0; i < VITA_ASYNC_RENDER_SLOT_COUNT; ++i) {
+                if (g_vita_async_render_slots[i].state == VITA_ASYNC_SLOT_READY &&
+                    g_vita_async_render_slots[i].sequence < best_sequence) {
+                    best_sequence = g_vita_async_render_slots[i].sequence;
+                    slot_index = i;
+                }
+            }
+            if (slot_index < 0) {
+                SDL_CondWait(g_vita_async_render_work_cond, g_vita_async_render_mutex);
+            }
+        }
+
+        if (slot_index < 0 && g_vita_async_render_stop) {
+            SDL_UnlockMutex(g_vita_async_render_mutex);
+            break;
+        }
+
+        VitaAsyncRenderSlot& slot = g_vita_async_render_slots[slot_index];
+        slot.state = VITA_ASYNC_SLOT_RENDERING;
+        SDL_UnlockMutex(g_vita_async_render_mutex);
+
+        GBPlatformTimingInfo timing = {};
+        const double total_start = sdl_now_ms();
+        const double upload_start = sdl_now_ms();
+        void* pixels = NULL;
+        int pitch = 0;
+        if (SDL_LockTexture(g_texture, NULL, &pixels, &pitch) == 0 && pixels) {
+            const uint8_t* src = (const uint8_t*)slot.framebuffer;
+            uint8_t* dst = (uint8_t*)pixels;
+            const size_t row_bytes = GB_SCREEN_WIDTH * sizeof(uint32_t);
+            for (int y = 0; y < GB_SCREEN_HEIGHT; ++y) {
+                memcpy(dst + (size_t)y * (size_t)pitch,
+                       src + (size_t)y * row_bytes,
+                       row_bytes);
+            }
+            SDL_UnlockTexture(g_texture);
+        }
+        timing.upload_ms = sdl_now_ms() - upload_start;
+
+        const double compose_start = sdl_now_ms();
+        SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(g_renderer);
+        SDL_RenderCopy(g_renderer, g_texture, NULL, &g_game_viewport);
+        timing.compose_ms = sdl_now_ms() - compose_start;
+
+        const double present_start = sdl_now_ms();
+        SDL_RenderPresent(g_renderer);
+        timing.present_ms = sdl_now_ms() - present_start;
+        timing.total_render_ms = sdl_now_ms() - total_start;
+
+        SDL_LockMutex(g_vita_async_render_mutex);
+        g_vita_async_last_render_timing = timing;
+        slot.state = VITA_ASYNC_SLOT_FREE;
+        SDL_CondBroadcast(g_vita_async_render_free_cond);
+        SDL_UnlockMutex(g_vita_async_render_mutex);
+    }
+    return 0;
+}
+
+static bool vita_async_render_start(void) {
+    if (g_vita_async_render_thread) {
+        return true;
+    }
+
+    g_vita_async_render_mutex = SDL_CreateMutex();
+    g_vita_async_render_work_cond = SDL_CreateCond();
+    g_vita_async_render_free_cond = SDL_CreateCond();
+    if (!g_vita_async_render_mutex || !g_vita_async_render_work_cond ||
+        !g_vita_async_render_free_cond) {
+        if (g_vita_async_render_free_cond) SDL_DestroyCond(g_vita_async_render_free_cond);
+        if (g_vita_async_render_work_cond) SDL_DestroyCond(g_vita_async_render_work_cond);
+        if (g_vita_async_render_mutex) SDL_DestroyMutex(g_vita_async_render_mutex);
+        g_vita_async_render_free_cond = NULL;
+        g_vita_async_render_work_cond = NULL;
+        g_vita_async_render_mutex = NULL;
+        return false;
+    }
+
+    for (int i = 0; i < VITA_ASYNC_RENDER_SLOT_COUNT; ++i) {
+        g_vita_async_render_slots[i].state = VITA_ASYNC_SLOT_FREE;
+    }
+    g_vita_async_render_stop = false;
+    g_vita_async_render_next_sequence = 1;
+    g_vita_async_last_render_timing = {};
+    g_vita_async_render_thread = SDL_CreateThread(vita_async_render_worker, "VitaRender", NULL);
+    if (!g_vita_async_render_thread) {
+        SDL_DestroyCond(g_vita_async_render_free_cond);
+        SDL_DestroyCond(g_vita_async_render_work_cond);
+        SDL_DestroyMutex(g_vita_async_render_mutex);
+        g_vita_async_render_free_cond = NULL;
+        g_vita_async_render_work_cond = NULL;
+        g_vita_async_render_mutex = NULL;
+        return false;
+    }
+    return true;
+}
+
+static void vita_async_render_flush(void) {
+    if (!g_vita_async_render_thread || !g_vita_async_render_mutex) {
+        return;
+    }
+
+    SDL_LockMutex(g_vita_async_render_mutex);
+    while (!vita_async_render_all_slots_free()) {
+        SDL_CondWait(g_vita_async_render_free_cond, g_vita_async_render_mutex);
+    }
+    SDL_UnlockMutex(g_vita_async_render_mutex);
+}
+
+static void vita_async_render_shutdown(void) {
+    if (!g_vita_async_render_thread) {
+        return;
+    }
+
+    vita_async_render_flush();
+    SDL_LockMutex(g_vita_async_render_mutex);
+    g_vita_async_render_stop = true;
+    SDL_CondBroadcast(g_vita_async_render_work_cond);
+    SDL_UnlockMutex(g_vita_async_render_mutex);
+
+    SDL_WaitThread(g_vita_async_render_thread, NULL);
+    g_vita_async_render_thread = NULL;
+    SDL_DestroyCond(g_vita_async_render_free_cond);
+    SDL_DestroyCond(g_vita_async_render_work_cond);
+    SDL_DestroyMutex(g_vita_async_render_mutex);
+    g_vita_async_render_free_cond = NULL;
+    g_vita_async_render_work_cond = NULL;
+    g_vita_async_render_mutex = NULL;
+}
+
+static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t frame_number) {
+    SDL_LockMutex(g_vita_async_render_mutex);
+    int slot_index = -1;
+    while (slot_index < 0) {
+        for (int i = 0; i < VITA_ASYNC_RENDER_SLOT_COUNT; ++i) {
+            if (g_vita_async_render_slots[i].state == VITA_ASYNC_SLOT_FREE) {
+                slot_index = i;
+                break;
+            }
+        }
+        if (slot_index < 0) {
+            SDL_CondWait(g_vita_async_render_free_cond, g_vita_async_render_mutex);
+        }
+    }
+
+    VitaAsyncRenderSlot& slot = g_vita_async_render_slots[slot_index];
+    memcpy(slot.framebuffer, framebuffer, sizeof(slot.framebuffer));
+    slot.frame_number = frame_number;
+    slot.sequence = g_vita_async_render_next_sequence++;
+    slot.state = VITA_ASYNC_SLOT_READY;
+    SDL_CondSignal(g_vita_async_render_work_cond);
+    SDL_UnlockMutex(g_vita_async_render_mutex);
+}
+
+static bool vita_async_render_can_use(void) {
+    if (g_benchmark_mode || g_app_suspended || !g_renderer || !g_texture ||
+        g_renderer_reset_pending ||
+        g_texture_width != GB_SCREEN_WIDTH || g_texture_height != GB_SCREEN_HEIGHT ||
+        g_app_config.widescreen_mode != ASPECT_NATIVE_10_9 || g_palette_idx != 0 ||
+        g_show_menu || g_show_overlay ||
+        g_lighting_config.enabled ||
+        g_postprocess_config.vignette_enabled ||
+        g_postprocess_config.film_grain_enabled ||
+        g_postprocess_config.scanlines_enabled ||
+        g_postprocess_config.crt_mask_enabled ||
+        g_postprocess_config.color_grade != COLOR_GRADE_OFF ||
+        g_hd_pack_config.enabled || g_touch_overlay_config.enabled ||
+        (g_port_frame_valid && g_port_frame.command_count != 0) ||
+        g_snapshot_frame_count != 0 || g_dump_count != 0 ||
+        g_dump_present_count != 0 || g_composed_frame_count != 0) {
+        return false;
+    }
+    return true;
+}
+#endif
+
 /* ============================================================================
  * Platform Functions
  * ========================================================================== */
 
 void gb_platform_shutdown(void) {
+#if defined(__VITA__)
+    vita_async_render_shutdown();
+#endif
     hd_pack_shutdown();
     music_pack_shutdown();
     close_input_record_file();
@@ -3703,6 +3955,17 @@ bool gb_platform_init(int scale) {
         return false;
     }
     load_runtime_preferences();
+#if defined(__VITA__)
+    g_fullscreen = true;
+    g_app_config.fullscreen = true;
+    g_app_config.widescreen_mode = ASPECT_NATIVE_10_9;
+    g_render_scaling_mode = GB_RENDER_SCALING_ASPECT_FIT;
+    g_app_config.scaling_mode = GB_RENDER_SCALING_ASPECT_FIT;
+    g_render_filter_mode = GB_RENDER_FILTER_NEAREST;
+    g_app_config.filter_mode = GB_RENDER_FILTER_NEAREST;
+    g_windowed_width = REGAIDEN_VITA_DISPLAY_WIDTH;
+    g_windowed_height = REGAIDEN_VITA_DISPLAY_HEIGHT;
+#endif
     lighting_init();
     postprocess_init();
     /*
@@ -3782,12 +4045,17 @@ bool gb_platform_init(int scale) {
      * NO VSync - we use wall-clock timing to run at exactly 59.7 FPS.
      * This is essential for non-60Hz monitors (like 100Hz).
      */
+#if defined(__VITA__)
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "VITA gxm");
+    g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
+#else
     g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
         
     if (!g_renderer) {
         fprintf(stderr, "[SDL] Hardware renderer failed, trying software fallback...\n");
         g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
     }
+#endif
         
     if (!g_renderer) {
         fprintf(stderr, "[SDL] SDL_CreateRenderer failed: %s\n", SDL_GetError());
@@ -4226,15 +4494,30 @@ void gb_platform_submit_port_frame(void* user, const GBPortFrame* frame) {
 
 
 void gb_platform_render_frame(const uint32_t* framebuffer) {
+#if defined(__VITA__)
+    if (framebuffer && vita_async_render_can_use() && vita_async_render_start()) {
+        g_present_count++;
+        prepare_guest_frame(framebuffer);
+        vita_async_render_enqueue(framebuffer, (uint32_t)g_frame_count);
+        return;
+    }
+    vita_async_render_flush();
+#endif
     render_frame_internal(framebuffer, true);
 }
 
 void gb_platform_present_framebuffer(const uint32_t* framebuffer) {
+#if defined(__VITA__)
+    vita_async_render_flush();
+#endif
     const uint32_t* stable_framebuffer = g_last_guest_framebuffer_valid ? g_last_guest_framebuffer : framebuffer;
     render_frame_internal(stable_framebuffer, false);
 }
 
 void gb_platform_render_lcd_off_frame(void) {
+#if defined(__VITA__)
+    vita_async_render_flush();
+#endif
     ensure_lcd_off_framebuffer();
     const uint32_t* stable_framebuffer = g_last_guest_framebuffer_valid ? g_last_guest_framebuffer : g_lcd_off_framebuffer;
     render_frame_internal(stable_framebuffer, false);
@@ -4242,6 +4525,19 @@ void gb_platform_render_lcd_off_frame(void) {
 
 void gb_platform_get_timing_info(GBPlatformTimingInfo* out) {
     if (!out) return;
+#if defined(__VITA__)
+    if (g_vita_async_render_thread && g_vita_async_render_mutex) {
+        GBPlatformTimingInfo timing = g_last_timing;
+        SDL_LockMutex(g_vita_async_render_mutex);
+        timing.upload_ms = g_vita_async_last_render_timing.upload_ms;
+        timing.compose_ms = g_vita_async_last_render_timing.compose_ms;
+        timing.present_ms = g_vita_async_last_render_timing.present_ms;
+        timing.total_render_ms = g_vita_async_last_render_timing.total_render_ms;
+        SDL_UnlockMutex(g_vita_async_render_mutex);
+        *out = timing;
+        return;
+    }
+#endif
     *out = g_last_timing;
 }
 
@@ -4367,7 +4663,7 @@ static void sdl_get_persistent_path(char* buffer, size_t size, const char* rom_n
         return;
     }
 
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__VITA__)
     const std::string resolved = resolve_writable_path(filename.c_str(), base_name.c_str());
     snprintf(buffer, size, "%s", resolved.c_str());
 #else
