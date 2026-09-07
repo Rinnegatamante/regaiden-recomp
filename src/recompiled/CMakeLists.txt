@@ -3,6 +3,11 @@ project(Resident_Evil_Gaiden__USA_ C CXX)
 
 include(CheckIPOSupported)
 
+if(VITA)
+    set(CMAKE_C_FLAGS "-Wl,-q,--pic-veneer")
+    set(CMAKE_CXX_FLAGS "-Wl,-q,--pic-veneer")
+endif()
+
 # Set C standard
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -17,6 +22,7 @@ endif()
 option(GBRECOMP_ENABLE_PERFORMANCE_COUNTERS "Compile generated/runtime performance counters" OFF)
 
 set(GBRECOMP_GENERATED_COMPILE_JOBS "8" CACHE STRING "Maximum concurrent generated-source compiles under Ninja; 0 disables the pool")
+set(GBRECOMP_LTO_JOBS "1" CACHE STRING "Parallel GCC LTO workers used when IPO/LTO is enabled")
 
 # Migrate stale generated-project cache entries when the default profile changes.
 set(GBRECOMP_PROFILE_CACHE_VERSION "2")
@@ -101,6 +107,41 @@ target_include_directories(gbrt PUBLIC
 )
 target_link_libraries(gbrt PUBLIC SDL2::SDL2)
 target_compile_definitions(gbrt PUBLIC GB_HAS_SDL2)
+
+if(VITA)
+    target_link_libraries(gbrt PUBLIC
+        vitaGL
+        vitashark
+        SceShaccCgExt
+        taihen_stub
+        SceShaccCg_stub
+        SceKernelDmacMgr_stub
+        mathneon
+        SceIme_stub
+        SceAppUtil_stub
+        SceAudioIn_stub
+        ScePower_stub
+        SceProcessmgr_stub
+        SceGxm_stub
+        SceDisplay_stub
+        SceCtrl_stub
+        SceAppMgr_stub
+        SceAppUtil_stub
+        SceAudio_stub
+        SceAudioIn_stub
+        SceSysmodule_stub
+        SceIofilemgr_stub
+        SceCommonDialog_stub
+        SceTouch_stub
+        SceHid_stub
+        SceMotion_stub
+        ScePower_stub
+        SceProcessmgr_stub
+        SceRtc_stub
+        SceLibKernel_stub
+        m
+    )
+endif()
 
 if(GBRECOMP_ENABLE_PERFORMANCE_COUNTERS)
     target_compile_definitions(gbrt PUBLIC GBRT_ENABLE_PERFORMANCE_COUNTERS)
@@ -418,7 +459,6 @@ add_executable(Resident_Evil_Gaiden__USA_
     Resident_Evil_Gaiden__USA__funcs_232.c
     Resident_Evil_Gaiden__USA__funcs_233.c
     Resident_Evil_Gaiden__USA__funcs_234.c
-    Resident_Evil_Gaiden__USA__rom.c
 )
 
 # Large generated translation units are memory-intensive. Keep runtime/UI
@@ -768,12 +808,24 @@ if(GBRECOMP_ENABLE_IPO AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(GBRECOMP_IPO_SUPPORTED)
         set_property(TARGET gbrt PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
         set_property(TARGET Resident_Evil_Gaiden__USA_ PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND GBRECOMP_LTO_JOBS MATCHES "^[1-9][0-9]*$")
+            set(GBRECOMP_LTO_PARALLEL_FLAG "-flto=${GBRECOMP_LTO_JOBS}")
+            target_compile_options(gbrt PRIVATE "${GBRECOMP_LTO_PARALLEL_FLAG}")
+            target_compile_options(Resident_Evil_Gaiden__USA_ PRIVATE "${GBRECOMP_LTO_PARALLEL_FLAG}")
+            target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE "${GBRECOMP_LTO_PARALLEL_FLAG}")
+        endif()
     else()
         message(STATUS "GB Recompiled: IPO/LTO not enabled (${GBRECOMP_IPO_ERROR})")
     endif()
 endif()
 
 target_link_libraries(Resident_Evil_Gaiden__USA_ gbrt)
+if(VITA)
+    target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE
+        -Wl,--undefined=sceUserMainThreadStackSize
+    )
+endif()
 if(TARGET SDL2::SDL2main)
     target_link_libraries(Resident_Evil_Gaiden__USA_ SDL2::SDL2main)
 elseif(TARGET SDL2main)

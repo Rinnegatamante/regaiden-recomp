@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+build-vita/
 build_release/
 bin/
 disassembly/
