@@ -185,6 +185,12 @@ static uint8_t try_dispatch_compiled_ram_overlay(GBContext* ctx, uint16_t addr, 
 
 void gb_dispatch(GBContext* ctx, uint16_t addr) {
     ctx->pc = addr;
+    if (addr == 0x0050u && !ctx->single_step_mode &&
+        gbrt_instruction_limit == 0 && !ctx->trace_entries_enabled &&
+        !gbrt_trace_enabled && !gbrt_test_breakpoint_enabled) {
+        int_timer(ctx);
+        if (ctx->stopped || ctx->halted) return;
+    }
     while (!ctx->stopped && !ctx->halted) {
         gbrt_note_generated_indirect_dispatch(ctx);
         addr = ctx->pc;
