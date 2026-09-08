@@ -711,6 +711,19 @@ int Resident_Evil_Gaiden__USA__main(int argc, char* argv[]) {
     const uint32_t lcd_smooth_slice_cycles = 70224u;
     bool running = true;
     while (running) {
+        if (gb_platform_menu_active()) {
+            if (!gb_platform_poll_events(ctx)) {
+                running = false;
+                break;
+            }
+            if (gb_platform_menu_active()) {
+                const uint32_t* paused_fb = gb_get_framebuffer(ctx);
+                if (paused_fb) gb_platform_present_framebuffer(paused_fb);
+                gb_platform_vsync(lcd_smooth_slice_cycles);
+            }
+            continue;
+        }
+
         double emu_ms = 0.0;
         double render_ms = 0.0;
         double upload_ms = 0.0;

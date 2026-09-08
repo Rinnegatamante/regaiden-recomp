@@ -272,6 +272,7 @@ static void update_controller_axis_binding_state(void);
 static void recompute_audio_targets(void);
 static void refresh_audio_device_pause_state(void);
 static void reset_audio_output_buffer(bool preserve_stats);
+static void set_menu_visible(bool visible);
 static char* trim_ascii(char* text);
 static void update_effective_joypad_state(void);
 static void save_runtime_preferences(void);
@@ -1526,7 +1527,7 @@ static void update_runtime_action_state(GBContext* ctx) {
                     break;
 
                 case GB_INPUT_ACTION_TOGGLE_MENU:
-                    g_show_menu = !g_show_menu;
+                    set_menu_visible(!g_show_menu);
                     break;
 
                 case GB_INPUT_ACTION_TOGGLE_PORT_UI:
@@ -2623,7 +2624,7 @@ upload_processed_frame:
         ImGui::Text("Resident Evil Gaiden - Recompilation Engine");
         ImGui::SameLine(ImGui::GetWindowWidth() - 120.0f * ui_scale);
         if (ImGui::Button("Resume (Esc)", ImVec2(100.0f * ui_scale, 0.0f))) {
-            g_show_menu = false;
+            set_menu_visible(false);
         }
         ImGui::Separator();
 
@@ -3643,6 +3644,7 @@ static bool audio_output_should_run(void) {
            g_audio_output_enabled &&
            !g_benchmark_mode &&
            !g_app_suspended &&
+           !g_show_menu &&
            effective_speed_percent() == 100;
 }
 
@@ -3721,6 +3723,12 @@ static void reset_audio_output_buffer(bool preserve_stats) {
         g_audio_samples_written = 0;
         g_audio_write_publications = 0;
     }
+}
+
+static void set_menu_visible(bool visible) {
+    if (g_show_menu == visible) return;
+    g_show_menu = visible;
+    reset_audio_output_buffer(true);
 }
 
 /* SDL callback - pulls samples from ring buffer */
@@ -4175,7 +4183,7 @@ static bool handle_runtime_event(const SDL_Event* event, GBContext* ctx) {
     uint8_t touch_prev_buttons = g_joypad_buttons;
     touch_overlay_handle_event(event, touch_event_w, touch_event_h);
     if (touch_overlay_menu_requested()) {
-        g_show_menu = !g_show_menu;
+        set_menu_visible(!g_show_menu);
         touch_overlay_clear_menu_request();
     }
     if (event->type == SDL_FINGERDOWN || event->type == SDL_FINGERUP || event->type == SDL_FINGERMOTION) {
@@ -4242,15 +4250,18 @@ static bool handle_runtime_event(const SDL_Event* event, GBContext* ctx) {
             break;
 
         case SDL_CONTROLLERAXISMOTION: {
-            if (g_show_menu && ImGui::GetCurrentContext() != NULL) {
-                ImGuiIO& io = ImGui::GetIO();
-                if (event->caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY || event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
-                    Sint16 val = event->caxis.value;
-                    if (abs(val) > 8000) {
-                        float scroll_y = -(float)val / 32767.0f * 0.8f;
-                        io.AddMouseWheelEvent(0.0f, scroll_y);
+            if (g_show_menu) {
+                if (ImGui::GetCurrentContext() != NULL) {
+                    ImGuiIO& io = ImGui::GetIO();
+                    if (event->caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY || event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
+                        Sint16 val = event->caxis.value;
+                        if (abs(val) > 8000) {
+                            float scroll_y = -(float)val / 32767.0f * 0.8f;
+                            io.AddMouseWheelEvent(0.0f, scroll_y);
+                        }
                     }
                 }
+                return true;
             }
             uint8_t previous_dpad = g_joypad_dpad;
             uint8_t previous_buttons = g_joypad_buttons;
@@ -4278,23 +4289,31 @@ static bool handle_runtime_event(const SDL_Event* event, GBContext* ctx) {
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP: {
             const bool pressed = (event->type == SDL_CONTROLLERBUTTONDOWN);
-            if (g_show_menu && pressed && ImGui::GetCurrentContext() != NULL) {
-                ImGuiIO& io = ImGui::GetIO();
-                if (event->cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
-                    io.AddMouseWheelEvent(0.0f, 2.5f);
-                } else if (event->cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
-                    io.AddMouseWheelEvent(0.0f, -2.5f);
-                } else if (event->cbutton.button == SDL_CONTROLLER_BUTTON_B || event->cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
-                    g_show_menu = false;
-                    return true;
+            if (g_show_menu) {
+                if (pressed && ImGui::GetCurrentContext() != NULL) {
+                    ImGuiIO& io = ImGui::GetIO();
+                    if (event->cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
+                        io.AddMouseWheelEvent(0.0f, 2.5f);
+                    } else if (event->cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
+                        io.AddMouseWheelEvent(0.0f, -2.5f);
+                    }
                 }
+                if (pressed && (event->cbutton.button == SDL_CONTROLLER_BUTTON_B ||
+                                event->cbutton.button == SDL_CONTROLLER_BUTTON_BACK
+#if defined(__VITA__)
+                                || event->cbutton.button == SDL_CONTROLLER_BUTTON_Y
+#endif
+                                )) {
+                    set_menu_visible(false);
+                }
+                return true;
             }
             uint8_t previous_dpad = g_joypad_dpad;
             uint8_t previous_buttons = g_joypad_buttons;
 
             if (event->cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
                 if (pressed) {
-                    g_show_menu = !g_show_menu;
+                    set_menu_visible(!g_show_menu);
                 }
                 return true;
             }
@@ -4356,7 +4375,7 @@ static bool handle_runtime_event(const SDL_Event* event, GBContext* ctx) {
                 case SDL_SCANCODE_ESCAPE:
                 case SDL_SCANCODE_AC_BACK:
                     if (pressed && event->key.repeat == 0) {
-                        g_show_menu = !g_show_menu;
+                        set_menu_visible(!g_show_menu);
                     }
                     return true;
 
@@ -4504,6 +4523,10 @@ void gb_platform_render_frame(const uint32_t* framebuffer) {
     vita_async_render_flush();
 #endif
     render_frame_internal(framebuffer, true);
+}
+
+bool gb_platform_menu_active(void) {
+    return g_show_menu;
 }
 
 void gb_platform_present_framebuffer(const uint32_t* framebuffer) {
@@ -5094,6 +5117,8 @@ void gb_platform_submit_port_frame(void* user, const GBPortFrame* frame) {
 void gb_platform_render_frame(const uint32_t* framebuffer) {
     (void)framebuffer;
 }
+
+bool gb_platform_menu_active(void) { return false; }
 
 void gb_platform_present_framebuffer(const uint32_t* framebuffer) {
     (void)framebuffer;

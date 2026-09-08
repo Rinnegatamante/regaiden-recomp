@@ -81,6 +81,9 @@ void gb_platform_shutdown(void);
  */
 bool gb_platform_poll_events(GBContext* ctx);
 
+/** @brief Return whether the runtime settings menu is currently open. */
+bool gb_platform_menu_active(void);
+
 /**
  * @brief Render frame to screen
  */
