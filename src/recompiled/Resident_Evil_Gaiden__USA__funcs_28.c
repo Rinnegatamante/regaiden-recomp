@@ -7949,6 +7949,9 @@ loc_0d_44e1:
     if (ctx->single_step_mode) return;
     /* CALL $22ca */
 pc_44e3:
+    if (g_app_config.cheat_one_hit_kill) {
+        ctx->e = 0xFF;
+    }
     /* 0d:44e3 */     gbrt_timed_call(ctx, 0x22ca, 0x44e6);
     if (gbrt_generated_safepoint(ctx)) return;
     if (ctx->single_step_mode) return;
@@ -19866,6 +19869,9 @@ loc_0d_49c0:
     if (gbrt_generated_safepoint(ctx)) return;
     if (ctx->single_step_mode) return;
 loc_0d_49c2:
+    if (g_app_config.cheat_one_hit_kill) {
+        ctx->e = 0xFF;
+    }
     /* LD A,(BC) */
     /* 0d:49c2 */     gb_tick(ctx, 7);
     ctx->a = gb_read8(ctx, ctx->bc);
