@@ -36,7 +36,8 @@ typedef enum {
     TOUCH_BTN_SELECT            = (1 << 6),
     TOUCH_BTN_START             = (1 << 7),
     TOUCH_BTN_MENU              = (1 << 8),
-    TOUCH_BTN_TOGGLE_VISIBILITY = (1 << 9)
+    TOUCH_BTN_TOGGLE_VISIBILITY = (1 << 9),
+    TOUCH_BTN_DASH              = (1 << 10)
 } TouchButtonFlag;
 
 #define MAX_TOUCH_FINGERS 10
@@ -112,19 +113,23 @@ static uint32_t evaluate_point(float x, float y, int screen_w, int screen_h) {
         if (angle >= -67.5f && angle <= 67.5f) mask |= TOUCH_BTN_RIGHT;
     }
 
-    // 3. Action Buttons A & B
-    float a_cx, a_cy, b_cx, b_cy;
+    // 3. Action Buttons A, B & Dash
+    float a_cx, a_cy, b_cx, b_cy, dash_cx, dash_cy;
     float btn_r = 38.0f * scale;
     if (is_portrait) {
         a_cx = (float)screen_w * 0.82f;
         a_cy = (float)screen_h * 0.66f;
         b_cx = (float)screen_w * 0.65f;
         b_cy = (float)screen_h * 0.74f;
+        dash_cx = (float)screen_w * 0.65f;
+        dash_cy = (float)screen_h * 0.58f;
     } else {
         a_cx = (float)screen_w - (55.0f * scale);
         a_cy = (float)screen_h - (110.0f * scale);
         b_cx = (float)screen_w - (125.0f * scale);
         b_cy = (float)screen_h - (55.0f * scale);
+        dash_cx = (float)screen_w - (125.0f * scale);
+        dash_cy = (float)screen_h - (130.0f * scale);
     }
 
     if ((px - a_cx) * (px - a_cx) + (py - a_cy) * (py - a_cy) <= btn_r * btn_r) {
@@ -132,6 +137,9 @@ static uint32_t evaluate_point(float x, float y, int screen_w, int screen_h) {
     }
     if ((px - b_cx) * (px - b_cx) + (py - b_cy) * (py - b_cy) <= btn_r * btn_r) {
         mask |= TOUCH_BTN_B;
+    }
+    if ((px - dash_cx) * (px - dash_cx) + (py - dash_cy) * (py - dash_cy) <= btn_r * btn_r) {
+        mask |= TOUCH_BTN_DASH;
     }
 
     // 4. Select & Start Buttons
@@ -398,6 +406,37 @@ void touch_overlay_render(SDL_Renderer* renderer, int window_w, int window_h) {
     SDL_SetRenderDrawColor(renderer, 255, 190, 100, b_act ? active_alpha : base_alpha);
     draw_circle_outline(renderer, (int)b_cx, (int)b_cy, (int)btn_r, 2);
 
+    // Button Dash / Run (Electric Blue with >> chevron)
+    float dash_cx, dash_cy;
+    if (is_portrait) {
+        dash_cx = (float)window_w * 0.65f;
+        dash_cy = (float)window_h * 0.58f;
+    } else {
+        dash_cx = (float)window_w - (125.0f * scale);
+        dash_cy = (float)window_h - (130.0f * scale);
+    }
+    bool dash_act = (s_active_mask & TOUCH_BTN_DASH) != 0;
+    SDL_SetRenderDrawColor(renderer, dash_act ? 30 : 20, dash_act ? 180 : 100, dash_act ? 230 : 140, dash_act ? active_alpha : base_alpha);
+    draw_filled_circle(renderer, (int)dash_cx, (int)dash_cy, (int)btn_r);
+    SDL_SetRenderDrawColor(renderer, 110, 235, 255, dash_act ? active_alpha : base_alpha);
+    draw_circle_outline(renderer, (int)dash_cx, (int)dash_cy, (int)btn_r, 2);
+
+    // Double chevron >> sprint icon
+    SDL_SetRenderDrawColor(renderer, 220, 245, 255, dash_act ? active_alpha : base_alpha);
+    int ch_off = (int)(7.0f * scale);
+    int ch_h = (int)(9.0f * scale);
+    int ch_w = (int)(6.0f * scale);
+    // Chevron 1
+    SDL_RenderDrawLine(renderer, (int)dash_cx - ch_off, (int)dash_cy - ch_h, (int)dash_cx - ch_off + ch_w, (int)dash_cy);
+    SDL_RenderDrawLine(renderer, (int)dash_cx - ch_off + ch_w, (int)dash_cy, (int)dash_cx - ch_off, (int)dash_cy + ch_h);
+    SDL_RenderDrawLine(renderer, (int)dash_cx - ch_off + 1, (int)dash_cy - ch_h, (int)dash_cx - ch_off + ch_w + 1, (int)dash_cy);
+    SDL_RenderDrawLine(renderer, (int)dash_cx - ch_off + ch_w + 1, (int)dash_cy, (int)dash_cx - ch_off + 1, (int)dash_cy + ch_h);
+    // Chevron 2
+    SDL_RenderDrawLine(renderer, (int)dash_cx + 1, (int)dash_cy - ch_h, (int)dash_cx + 1 + ch_w, (int)dash_cy);
+    SDL_RenderDrawLine(renderer, (int)dash_cx + 1 + ch_w, (int)dash_cy, (int)dash_cx + 1, (int)dash_cy + ch_h);
+    SDL_RenderDrawLine(renderer, (int)dash_cx + 2, (int)dash_cy - ch_h, (int)dash_cx + 2 + ch_w, (int)dash_cy);
+    SDL_RenderDrawLine(renderer, (int)dash_cx + 2 + ch_w, (int)dash_cy, (int)dash_cx + 2, (int)dash_cy + ch_h);
+
     // =========================================================================
     // 5. Select & Start Buttons
     // =========================================================================
@@ -459,4 +498,10 @@ bool touch_overlay_menu_requested(void) {
 
 void touch_overlay_clear_menu_request(void) {
     s_menu_requested = false;
+}
+
+bool touch_overlay_is_dash_pressed(void) {
+    if (!g_touch_overlay_config.enabled || !g_touch_overlay_config.visible) return false;
+    if (g_touch_overlay_config.auto_hide_on_controller && g_touch_overlay_config.controller_active) return false;
+    return (s_active_mask & TOUCH_BTN_DASH) != 0;
 }

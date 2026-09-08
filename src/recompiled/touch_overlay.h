@@ -29,6 +29,7 @@ uint8_t touch_overlay_get_dpad_mask(void);
 uint8_t touch_overlay_get_buttons_mask(void);
 bool touch_overlay_menu_requested(void);
 void touch_overlay_clear_menu_request(void);
+bool touch_overlay_is_dash_pressed(void);
 
 #ifdef __cplusplus
 }

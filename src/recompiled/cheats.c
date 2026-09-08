@@ -187,11 +187,10 @@ void cheats_apply_frame(GBContext* ctx) {
 
     // 4. Freeze Combat Reticle / Always Perfect Hit
     if (g_app_config.cheat_freeze_reticle) {
-        uint8_t reticle_p = read_memory_byte(ctx, 0xC22C);
-        bool in_battle = (reticle_p >= 0xD0 && reticle_p <= 0xDF) ||
-                         ((read_memory_byte(ctx, 0xCBCC) & 0x01) != 0);
+        bool in_battle = (ctx->rom_bank == 0x0D || ctx->rom_bank == 0x0E);
 
         if (in_battle) {
+            uint8_t reticle_p = read_memory_byte(ctx, 0xC22C);
             // Target center X position (between sweep bounds 0x50 and 0x94)
             uint8_t target_p = read_memory_byte(ctx, 0xC22D);
             uint8_t target_x = 0x72; // Midpoint between 0x50 and 0x94 (114 decimal)

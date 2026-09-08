@@ -1463,14 +1463,11 @@ static bool input_action_is_pressed(GBInputAction action) {
 static bool g_b_dash_active = false;
 
 static bool is_in_combat_mode(void) {
-    if (!g_registered_ctx || !g_registered_ctx->wram) {
+    if (!g_registered_ctx) {
         return false;
     }
-    uint8_t reticle_p = g_registered_ctx->wram[0xC22C - 0xC000];
-    if (reticle_p >= 0xD0 && reticle_p <= 0xDF) {
-        return true;
-    }
-    if ((g_registered_ctx->wram[0xCBCC - 0xC000] & 0x01) != 0) {
+    // Combat in Resident Evil Gaiden executes exclusively from ROM Bank 0x0D (13) and 0x0E (14)
+    if (g_registered_ctx->rom_bank == 0x0D || g_registered_ctx->rom_bank == 0x0E) {
         return true;
     }
     return false;
@@ -1480,10 +1477,16 @@ static bool is_gameplay_active(void) {
     if (!g_registered_ctx || !g_registered_ctx->wram) {
         return false;
     }
-    // Check if any character has HP (Leon = $C3B0, Barry = $C3B4, Eric = $C3B8)
-    if (g_registered_ctx->wram[0xC3B0 - 0xC000] > 0 ||
-        g_registered_ctx->wram[0xC3B4 - 0xC000] > 0 ||
-        g_registered_ctx->wram[0xC3B8 - 0xC000] > 0) {
+    // When a full-screen UI menu is open (inventory, PDA/map, save menu), ordinary gameplay is paused
+    if (gb_state_is_ui_screen(g_registered_ctx)) {
+        return false;
+    }
+    // Check if player is alive in active game:
+    // Barry = $C3B9 (100 HP), Leon = $C3BA (100 HP), Lucia = $C3BB (120 HP), or weapon inventory at $C3A4
+    if (g_registered_ctx->wram[0xC3B9 - 0xC000] > 0 ||
+        g_registered_ctx->wram[0xC3BA - 0xC000] > 0 ||
+        g_registered_ctx->wram[0xC3BB - 0xC000] > 0 ||
+        g_registered_ctx->wram[0xC3A4 - 0xC000] > 0) {
         return true;
     }
     return false;
@@ -1576,8 +1579,9 @@ static void update_runtime_action_state(GBContext* ctx) {
             // Mode 2: Always Run whenever moving
             g_dash_active = is_moving;
         } else {
-            // Mode 1: Hold button to run (dedicated Dash action or classic B button)
+            // Mode 1: Hold button to run (dedicated Dash action, Android touch dash, or classic B button)
             const bool wants_dash = input_action_is_pressed(GB_INPUT_ACTION_DASH) ||
+                                    touch_overlay_is_dash_pressed() ||
                                     (g_app_config.dash_button_b && g_b_dash_active);
             g_dash_active = is_moving && wants_dash;
         }
