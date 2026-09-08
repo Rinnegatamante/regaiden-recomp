@@ -4,6 +4,23 @@ All notable changes to **Resident Evil Gaiden Recompiled** will be documented in
 
 ## [Unreleased]
 
+### Quality of Life & Gameplay Enhancements (Windows & Android)
+- **New Configurable Dash / Run System**:
+  - Addresses *Resident Evil Gaiden*'s notoriously slow overworld exploration walking speed by introducing an optional sprint system.
+  - **Context-Sensitive Classic B-Button Dash**: Holding the Game Boy `B` button (Keyboard `X`/`K`, Gamepad `A`/`L1`) while moving with the D-Pad automatically sprints without opening the inventory. Tapping `B` while stationary opens the inventory screen as normal. Can be toggled on/off in the Gameplay settings.
+  - **Dedicated Dash Action**: Bindable in Controls & Mapping for both Keyboard (`Left Shift` and `Right Shift` by default) and Controllers (`R1` and `L1` shoulder buttons by default).
+  - **Configurable Modes**:
+    - `0 = Disabled (1x Walk Only)`
+    - `1 = Hold Button to Run (Default)`
+    - `2 = Always Run (Whenever Moving)`
+  - **Configurable Speed**: Adjustable from 125% to 250% (Default 200% / 2x speed) with 1-click Reset button.
+  - **Combat & Menu Safety**: Dashing automatically disables during battle (reticle check at `$C22C` and `$CBCC`), menus, and cutscenes, guaranteeing 100% normal combat timing and collision integrity.
+  - **Independent Audio Pacing**: CD audio / music packs continue playing at 100% natural pitch and tempo during dash exploration.
+- **New "Gameplay" Settings Tab**:
+  - Added a dedicated "Gameplay" tab in the ImGui settings window (`F10` or Guide/Home button) to configure Dash modes, speed slider, B-button behavior, and view control hints.
+- **Persistent INI Configuration**:
+  - Saved under `[Gameplay]` in `config.ini` as `dash_mode`, `dash_speed_percent`, and `dash_button_b`.
+
 ### Cheats Engine Overhaul (Windows & Android)
 - **Fixed Built-in Cheats Not Working**:
   - The previous implementation in `src/recompiled/cheats.c` targeted fictional memory addresses (`0xC804`, `0xC824`, `0xC80B`, `0xC910`, `0xC920`) that were never read or written by the game engine.
