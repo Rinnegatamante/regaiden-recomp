@@ -2,6 +2,25 @@
 
 All notable changes to **Resident Evil Gaiden Recompiled** will be documented in this file.
 
+## [Unreleased]
+
+### Cheats Engine Overhaul (Windows & Android)
+- **Fixed Built-in Cheats Not Working**:
+  - The previous implementation in `src/recompiled/cheats.c` targeted fictional memory addresses (`0xC804`, `0xC824`, `0xC80B`, `0xC910`, `0xC920`) that were never read or written by the game engine.
+  - Re-anchored all built-in cheats to the real, hardware-verified memory map extracted from the original Game Boy Color ROM and disassembly:
+    - **Infinite Health**: Writes to `$C3B9` (Barry, 100 HP), `$C3BA` (Leon, 100 HP), `$C3BB` (Lucia, 120 HP), clears poison flags in `$C3BC..$C3BE` and poison counters at `$C3D0..$C3D2`, and syncs the UI health mirror in WRAM Bank 2 (`$D491`).
+    - **Infinite Ammo**: Writes max ammo (99) to the 5 real weapon ammo pools at `$C3C1` (Handgun), `$C3C2` (Shotgun), `$C3C3` (Grenade Launcher), `$C3C4` (Assault Rifle), and `$C3C5` (Rocket Launcher).
+    - **Unlock All Weapons**: Sets ownership bitmasks at `$C3A4..$C3A6` and sets knife/handgun inventory bytes at `$C3BF..$C3C0`.
+    - **Infinite Items & First Aid Sprays**: Sets recovery item ownership bitmasks at `$C3A7..$C3A8` and max quantities (9) for First Aid Sprays (`$C3CD`), Green Herbs (`$C3CB`), Red Herbs (`$C3CC`), and Armor (`$C3CE..$C3CF`).
+    - **Freeze Combat Reticle / Always Perfect Hit**: Sets combat hit calculation result (`$C186`) to `2` (Critical / Perfect Hit) and resets reticle oscillation pointers (`$C195..$C196`).
+    - **One-Hit Kill in Battle**: Inspects all 16 enemy battle entity slots in WRAM Bank 4 (`$D000..$DF00`) and reduces active enemy HP (`offset +0x21`) to 1, causing them to die on the very next hit.
+  - Added safety guard to only apply cheats once active gameplay memory is initialized (`ctx->wram[0x03A4] != 0` or `$C3B9 != 0`), preventing corruption of boot/title screen state.
+- **Fixed GameShark Code Support**:
+  - `apply_gameshark_code` previously rejected any code not starting with `01`, completely breaking standard Game Boy Color GameShark codes starting with `9x` (e.g. `910AC1C3`, `923091D4`).
+  - Added support for Game Boy Color banked GameShark codes (`9B` prefix where `B` selects WRAM Bank 1-7).
+  - Sanitized code string input to strip spaces, hyphens, and delimiters automatically (e.g. `910A-C1C3` or `9230 91D4`).
+  - Updated ImGui UI placeholder in `platform_sdl.cpp` to use real Game Boy Color code syntax.
+
 ## [v0.3.1] - 2026-08-29
 
 ### Asset Packs on Android

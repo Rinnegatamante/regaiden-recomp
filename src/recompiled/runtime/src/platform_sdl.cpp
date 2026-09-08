@@ -2959,9 +2959,9 @@ upload_processed_frame:
                 ImGui::Separator();
                 ImGui::TextDisabled("Custom GameShark Codes:");
                 static char custom_name[64] = "My Cheat";
-                static char custom_code[32] = "016404C8";
+                static char custom_code[32] = "910AC1C3";
                 ImGui::InputText("Name", custom_name, sizeof(custom_name));
-                ImGui::InputText("Code (e.g. 016404C8)", custom_code, sizeof(custom_code));
+                ImGui::InputText("Code (e.g. 910AC1C3)", custom_code, sizeof(custom_code));
                 if (ImGui::Button("Add GameShark Code")) {
                     cheats_add_gameshark_code(custom_name, custom_code, true);
                 }
