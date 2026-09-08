@@ -2,7 +2,7 @@
 
 All notable changes to **Resident Evil Gaiden Recompiled** will be documented in this file.
 
-## [Unreleased]
+## [v0.4.0] - 2026-09-08
 
 ### Quality of Life & Gameplay Enhancements (Windows & Android)
 - **New Configurable Dash / Run System**:
