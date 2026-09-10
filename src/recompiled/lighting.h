@@ -29,6 +29,10 @@ extern LightingConfig g_lighting_config;
 
 void lighting_init(void);
 void lighting_update_player_dir(uint8_t dpad_state);
+PlayerFacingDir lighting_get_player_dir(void);
+bool lighting_get_player_screen_position(GBContext* ctx, int width, int height, int* out_x, int* out_y);
+bool lighting_is_active(GBContext* ctx);
+bool lighting_build_modulation_mask(GBContext* ctx, uint32_t* mask, int width, int height);
 void lighting_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height);
 
 #ifdef __cplusplus

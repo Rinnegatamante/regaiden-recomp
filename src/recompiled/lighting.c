@@ -24,12 +24,12 @@ LightingConfig g_lighting_config = {
 static PlayerFacingDir s_player_dir = DIR_DOWN;
 static uint32_t s_frame_counter = 0;
 
-// Precomputed 2D Light Lookup Tables for ultra-fast lock-solid 60 FPS rendering
+// Precompute player-relative light falloff once; a 501x501 LUT covers the 250px maximum beam reach.
 #define LUT_MAX_W 336
 #define LUT_MAX_H 144
-static uint8_t s_light_lut[4][LUT_MAX_H][LUT_MAX_W];
-static int s_lut_w = 0;
-static int s_lut_h = 0;
+#define LIGHT_LUT_RADIUS 250
+#define LIGHT_LUT_SIZE (LIGHT_LUT_RADIUS * 2 + 1)
+static uint8_t s_light_lut[LIGHT_LUT_SIZE][LIGHT_LUT_SIZE];
 static int s_cached_cone_angle = -1;
 static int s_cached_cone_dist = -1;
 
@@ -39,69 +39,97 @@ static float normalize_angle(float angle) {
     return angle;
 }
 
-static void rebuild_light_luts(int width, int height) {
-    if (width > LUT_MAX_W) width = LUT_MAX_W;
-    if (height > LUT_MAX_H) height = LUT_MAX_H;
-
-    s_lut_w = width;
-    s_lut_h = height;
+static void rebuild_light_luts(void) {
     s_cached_cone_angle = g_lighting_config.cone_angle_deg;
     s_cached_cone_dist = g_lighting_config.cone_distance;
 
-    float center_x = (float)width * 0.5f;
-    float center_y = (float)height * 0.5f;
     float half_cone = (float)(g_lighting_config.cone_angle_deg * 0.5 * M_PI / 180.0);
     float max_dist = (float)g_lighting_config.cone_distance;
+    if (max_dist > (float)LIGHT_LUT_RADIUS) max_dist = (float)LIGHT_LUT_RADIUS;
+    if (max_dist < 1.0f) max_dist = 1.0f;
     float inner_radius = 16.0f;
 
-    const float target_angles[4] = {
-        (float)(M_PI * 0.5), // DIR_DOWN
-        (float)(M_PI * 1.5), // DIR_UP
-        (float)M_PI,         // DIR_LEFT
-        0.0f                 // DIR_RIGHT
-    };
+    for (int y = 0; y < LIGHT_LUT_SIZE; ++y) {
+        const float dy = (float)(y - LIGHT_LUT_RADIUS);
+        for (int x = 0; x < LIGHT_LUT_SIZE; ++x) {
+            const float dx = (float)(x - LIGHT_LUT_RADIUS);
+            const float dist = sqrtf(dx * dx + dy * dy);
 
-    for (int dir = 0; dir < 4; dir++) {
-        float t_angle = target_angles[dir];
+            float light = 0.0f;
+            if (dist < inner_radius) {
+                light = 1.0f - (dist / inner_radius) * 0.3f;
+            } else if (dist < max_dist) {
+                const float angle_diff = fabsf(atan2f(dy, dx));
+                if (angle_diff < half_cone) {
+                    float angle_factor = cosf((angle_diff / half_cone) * (float)(M_PI * 0.5));
+                    angle_factor *= angle_factor;
 
-        for (int y = 0; y < height; y++) {
-            float dy = (float)y - center_y;
-
-            for (int x = 0; x < width; x++) {
-                float dx = (float)x - center_x;
-                float dist = sqrtf(dx * dx + dy * dy);
-
-                float light = 0.0f;
-                if (dist < inner_radius) {
-                    light = 1.0f - (dist / inner_radius) * 0.3f;
-                } else if (dist < max_dist) {
-                    float angle = atan2f(dy, dx);
-                    float angle_diff = fabsf(normalize_angle(angle - t_angle));
-
-                    if (angle_diff < half_cone) {
-                        float angle_factor = cosf((angle_diff / half_cone) * (float)(M_PI * 0.5));
-                        angle_factor = angle_factor * angle_factor;
-
-                        float dist_factor = 1.0f - (dist / max_dist);
-                        dist_factor = dist_factor * sqrtf(dist_factor);
-
-                        light = angle_factor * dist_factor;
-                    }
+                    float dist_factor = 1.0f - (dist / max_dist);
+                    dist_factor = dist_factor * sqrtf(dist_factor);
+                    light = angle_factor * dist_factor;
                 }
-
-                if (light > 1.0f) light = 1.0f;
-                if (light < 0.0f) light = 0.0f;
-                s_light_lut[dir][y][x] = (uint8_t)(light * 255.0f);
             }
+
+            if (light > 1.0f) light = 1.0f;
+            if (light < 0.0f) light = 0.0f;
+            s_light_lut[y][x] = (uint8_t)(light * 255.0f);
         }
     }
+}
+
+static uint16_t read_wram_u16(const GBContext* ctx, size_t offset) {
+    return (uint16_t)(ctx->wram[offset] | ((uint16_t)ctx->wram[offset + 1u] << 8));
+}
+
+bool lighting_get_player_screen_position(GBContext* ctx, int width, int height,
+                                         int* out_x, int* out_y) {
+    if (!out_x || !out_y || width <= 0 || height <= 0) return false;
+
+    *out_x = width / 2;
+    *out_y = height / 2;
+    if (!ctx || !ctx->wram) return false;
+
+    // C1BD/C1BF are Gaiden's camera focus; focus-camera yields the true player screen anchor even when room bounds clamp the camera.
+    const uint16_t focus_x = read_wram_u16(ctx, 0x01BDu);
+    const uint16_t focus_y = read_wram_u16(ctx, 0x01BFu);
+    const uint16_t camera_x = read_wram_u16(ctx, 0x01C5u);
+    const uint16_t camera_y = read_wram_u16(ctx, 0x01C7u);
+
+    const int native_x = (int)(int16_t)(focus_x - camera_x);
+    const int native_y = (int)(int16_t)(focus_y - camera_y);
+    const int wide_offset = (width - 160) / 2;
+
+    // Fall back to the centered light if camera state is stale during a screen transition.
+    if (native_x < -32 || native_x > 192 || native_y < -32 || native_y > 176) {
+        return false;
+    }
+
+    *out_x = native_x + wide_offset;
+    *out_y = native_y;
+    return true;
+}
+
+static uint8_t sample_light_lut(int dx, int dy, PlayerFacingDir dir) {
+    int forward;
+    int side;
+    switch (dir) {
+        case DIR_LEFT:  forward = -dx; side = dy; break;
+        case DIR_DOWN:  forward = dy;  side = dx; break;
+        case DIR_UP:    forward = -dy; side = dx; break;
+        case DIR_RIGHT:
+        default:        forward = dx;  side = dy; break;
+    }
+
+    if (forward < -LIGHT_LUT_RADIUS || forward > LIGHT_LUT_RADIUS ||
+        side < -LIGHT_LUT_RADIUS || side > LIGHT_LUT_RADIUS) {
+        return 0;
+    }
+    return s_light_lut[side + LIGHT_LUT_RADIUS][forward + LIGHT_LUT_RADIUS];
 }
 
 void lighting_init(void) {
     s_player_dir = DIR_DOWN;
     s_frame_counter = 0;
-    s_lut_w = 0;
-    s_lut_h = 0;
     s_cached_cone_angle = -1;
     s_cached_cone_dist = -1;
 }
@@ -112,6 +140,10 @@ void lighting_update_player_dir(uint8_t dpad_state) {
     else if (!(dpad_state & 0x02)) s_player_dir = DIR_LEFT;
     else if (!(dpad_state & 0x04)) s_player_dir = DIR_UP;
     else if (!(dpad_state & 0x08)) s_player_dir = DIR_DOWN;
+}
+
+PlayerFacingDir lighting_get_player_dir(void) {
+    return s_player_dir;
 }
 
 /*
@@ -158,8 +190,47 @@ static bool is_exploration_gameplay(const GBContext* ctx) {
     return false;
 }
 
+bool lighting_is_active(GBContext* ctx) {
+    return g_lighting_config.enabled && is_exploration_gameplay(ctx);
+}
+
+bool lighting_build_modulation_mask(GBContext* ctx, uint32_t* mask, int width, int height) {
+    if (!mask || width <= 0 || height <= 0 || width > LUT_MAX_W || height > LUT_MAX_H ||
+        !lighting_is_active(ctx)) {
+        return false;
+    }
+
+    if (g_lighting_config.cone_angle_deg != s_cached_cone_angle ||
+        g_lighting_config.cone_distance != s_cached_cone_dist) {
+        rebuild_light_luts();
+    }
+
+    int anchor_x, anchor_y;
+    lighting_get_player_screen_position(ctx, width, height, &anchor_x, &anchor_y);
+
+    int intensity_256 = (g_lighting_config.intensity * 256) / 100;
+    if (intensity_256 > 256) intensity_256 = 256;
+    if (intensity_256 < 0) intensity_256 = 0;
+
+    uint32_t ambient_256 = (uint32_t)(g_lighting_config.ambient_darkness * 256 / 100);
+    if (ambient_256 > 256) ambient_256 = 256;
+
+    for (int y = 0; y < height; ++y) {
+        uint32_t* out = &mask[(size_t)y * (size_t)width];
+        for (int x = 0; x < width; ++x) {
+            const uint32_t light_val = sample_light_lut(x - anchor_x, y - anchor_y, s_player_dir);
+            uint32_t light_contrib = (light_val * (uint32_t)intensity_256 * (256 - ambient_256)) >> 16;
+            uint32_t total_light = ambient_256 + light_contrib;
+            if (total_light > 256) total_light = 256;
+            const uint8_t v = (uint8_t)((total_light * 255u + 128u) >> 8);
+            out[x] = 0xFF000000u | ((uint32_t)v << 16) | ((uint32_t)v << 8) | v;
+        }
+    }
+    return true;
+}
+
 void lighting_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height) {
-    if (!g_lighting_config.enabled || !framebuffer || width <= 0 || height <= 0 || !ctx) {
+    if (!framebuffer || width <= 0 || height <= 0 || !lighting_is_active(ctx)) {
         return;
     }
 
@@ -177,19 +248,15 @@ void lighting_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height
      * guessing - see the state snapshots for finding the real flag.
      */
 
-    // Flashlight requires active player exploration
-    if (!is_exploration_gameplay(ctx)) {
-        return;
-    }
-
     s_frame_counter++;
 
-    // Rebuild LUT if dimensions or cone parameters changed
-    if (width != s_lut_w || height != s_lut_h ||
-        g_lighting_config.cone_angle_deg != s_cached_cone_angle ||
+    if (g_lighting_config.cone_angle_deg != s_cached_cone_angle ||
         g_lighting_config.cone_distance != s_cached_cone_dist) {
-        rebuild_light_luts(width, height);
+        rebuild_light_luts();
     }
+
+    int anchor_x, anchor_y;
+    lighting_get_player_screen_position(ctx, width, height, &anchor_x, &anchor_y);
 
     // Halogen bulb subtle flicker (integer scale 240-270 / 256)
     int flicker_factor = 256;
@@ -209,14 +276,8 @@ void lighting_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height
     uint32_t ambient_256 = (uint32_t)(g_lighting_config.ambient_darkness * 256 / 100);
     if (ambient_256 > 256) ambient_256 = 256;
 
-    // The LUT has a fixed LUT_MAX_W stride, so it has to be indexed row by row.
-    // Walking it linearly against the framebuffer only lined up at 336px wide
-    // (21:9) and sampled the wrong coordinates in native 10:9 and 16:9.
-    const uint8_t (*lut)[LUT_MAX_W] = s_light_lut[(int)s_player_dir];
-
-    // Blazing fast integer SIMD-ready lighting loop (< 0.03ms per frame)
+    // Use the precomputed cone with player-relative coordinates in the per-pixel lighting loop.
     for (int y = 0; y < height; y++) {
-        const uint8_t* lut_row = lut[y];
         uint32_t* row = &framebuffer[(size_t)y * (size_t)width];
 
         for (int x = 0; x < width; x++) {
@@ -225,7 +286,7 @@ void lighting_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height
             uint32_t g = (p >> 8) & 0xFF;
             uint32_t b = p & 0xFF;
 
-            uint32_t light_val = lut_row[x]; // 0 to 255
+            uint32_t light_val = sample_light_lut(x - anchor_x, y - anchor_y, s_player_dir); // 0 to 255
             uint32_t light_contrib = (light_val * (uint32_t)intensity_scaled * (256 - ambient_256)) >> 16;
             uint32_t total_light = ambient_256 + light_contrib;
             if (total_light > 256) total_light = 256;
