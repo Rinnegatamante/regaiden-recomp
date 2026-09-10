@@ -140,7 +140,8 @@ typedef enum GBInputAction {
     GB_INPUT_ACTION_TOGGLE_MUTE = 15,
     GB_INPUT_ACTION_TOGGLE_MENU = 16,
     GB_INPUT_ACTION_TOGGLE_PORT_UI = 17,
-    GB_INPUT_ACTION_COUNT = 18,
+    GB_INPUT_ACTION_DASH = 18,
+    GB_INPUT_ACTION_COUNT = 19,
 } GBInputAction;
 typedef enum GBInputBindingKind {
     GB_INPUT_BINDING_NONE = 0,
@@ -228,6 +229,7 @@ static GBBindingCaptureDevice g_binding_capture_device = GB_CAPTURE_DEVICE_NONE;
 static GBInputAction g_binding_capture_action = GB_INPUT_ACTION_RIGHT;
 static int g_binding_capture_slot = 0;
 static bool g_fast_forward_active = false;
+static bool g_dash_active = false;
 static bool g_max_speed_mode = false;
 static const char* g_input_action_names[GB_INPUT_ACTION_COUNT] = {
     "Right",
@@ -248,6 +250,7 @@ static const char* g_input_action_names[GB_INPUT_ACTION_COUNT] = {
     "Toggle Mute",
     "Toggle Menu",
     "Toggle Game Panel",
+    "Dash / Run (Hold)",
 };
 
 static bool has_interpreter_activity(const GBContext* ctx) {
@@ -417,6 +420,14 @@ static int effective_speed_percent(void) {
     }
     if (g_fast_forward_active && speed_percent < GB_FAST_FORWARD_SPEED_PERCENT) {
         return GB_FAST_FORWARD_SPEED_PERCENT;
+    }
+    if (g_dash_active) {
+        int target_dash = (g_app_config.dash_speed_percent >= 125 && g_app_config.dash_speed_percent <= 250)
+                              ? g_app_config.dash_speed_percent
+                              : 200;
+        if (speed_percent < target_dash) {
+            return target_dash;
+        }
     }
     return speed_percent;
 }
@@ -885,6 +896,7 @@ static const char* input_action_config_name(GBInputAction action) {
         case GB_INPUT_ACTION_TOGGLE_MUTE: return "toggle_mute";
         case GB_INPUT_ACTION_TOGGLE_MENU: return "toggle_menu";
         case GB_INPUT_ACTION_TOGGLE_PORT_UI: return "toggle_port_ui";
+        case GB_INPUT_ACTION_DASH: return "dash";
         case GB_INPUT_ACTION_COUNT:
         default:
             return "unknown";
@@ -997,7 +1009,7 @@ static void set_default_input_bindings(void) {
     g_keyboard_bindings[GB_INPUT_ACTION_B][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_X);
     g_keyboard_bindings[GB_INPUT_ACTION_B][1] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_K);
     g_keyboard_bindings[GB_INPUT_ACTION_SELECT][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_BACKSPACE);
-    g_keyboard_bindings[GB_INPUT_ACTION_SELECT][1] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_RSHIFT);
+    g_keyboard_bindings[GB_INPUT_ACTION_SELECT][1] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_SPACE);
     g_keyboard_bindings[GB_INPUT_ACTION_START][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_RETURN);
     g_keyboard_bindings[GB_INPUT_ACTION_FAST_FORWARD][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_TAB);
     g_keyboard_bindings[GB_INPUT_ACTION_TOGGLE_MAX_SPEED][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_GRAVE);
@@ -1009,6 +1021,8 @@ static void set_default_input_bindings(void) {
     g_keyboard_bindings[GB_INPUT_ACTION_TOGGLE_MUTE][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_M);
     g_keyboard_bindings[GB_INPUT_ACTION_TOGGLE_MENU][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_F10);
     g_keyboard_bindings[GB_INPUT_ACTION_TOGGLE_PORT_UI][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_F2);
+    g_keyboard_bindings[GB_INPUT_ACTION_DASH][0] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_LSHIFT);
+    g_keyboard_bindings[GB_INPUT_ACTION_DASH][1] = make_binding(GB_INPUT_BINDING_KEY, SDL_SCANCODE_RSHIFT);
 
     g_controller_bindings[GB_INPUT_ACTION_UP][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_DPAD_UP);
     g_controller_bindings[GB_INPUT_ACTION_UP][1] = make_binding(GB_INPUT_BINDING_CONTROLLER_AXIS_NEGATIVE, SDL_CONTROLLER_AXIS_LEFTY);
@@ -1019,9 +1033,7 @@ static void set_default_input_bindings(void) {
     g_controller_bindings[GB_INPUT_ACTION_RIGHT][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
     g_controller_bindings[GB_INPUT_ACTION_RIGHT][1] = make_binding(GB_INPUT_BINDING_CONTROLLER_AXIS_POSITIVE, SDL_CONTROLLER_AXIS_LEFTX);
     g_controller_bindings[GB_INPUT_ACTION_A][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_B);
-    g_controller_bindings[GB_INPUT_ACTION_A][1] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
     g_controller_bindings[GB_INPUT_ACTION_B][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_A);
-    g_controller_bindings[GB_INPUT_ACTION_B][1] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
     g_controller_bindings[GB_INPUT_ACTION_SELECT][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_BACK);
     g_controller_bindings[GB_INPUT_ACTION_START][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_START);
     g_controller_bindings[GB_INPUT_ACTION_FAST_FORWARD][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_AXIS_POSITIVE, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
@@ -1030,6 +1042,8 @@ static void set_default_input_bindings(void) {
     g_controller_bindings[GB_INPUT_ACTION_LOAD_STATE][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_Y);
     g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_LEFTSTICK);
     g_controller_bindings[GB_INPUT_ACTION_TOGGLE_PORT_UI][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSTICK);
+    g_controller_bindings[GB_INPUT_ACTION_DASH][0] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+    g_controller_bindings[GB_INPUT_ACTION_DASH][1] = make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
 
 #if defined(__VITA__)
     apply_vita_shortcut_bindings();
@@ -1480,6 +1494,38 @@ static bool input_action_is_pressed(GBInputAction action) {
     return false;
 }
 
+static bool g_b_dash_active = false;
+
+static bool is_in_combat_mode(void) {
+    if (!g_registered_ctx) {
+        return false;
+    }
+    // Combat in Resident Evil Gaiden executes exclusively from ROM Bank 0x0D (13) and 0x0E (14)
+    if (g_registered_ctx->rom_bank == 0x0D || g_registered_ctx->rom_bank == 0x0E) {
+        return true;
+    }
+    return false;
+}
+
+static bool is_gameplay_active(void) {
+    if (!g_registered_ctx || !g_registered_ctx->wram) {
+        return false;
+    }
+    // When a full-screen UI menu is open (inventory, PDA/map, save menu), ordinary gameplay is paused
+    if (gb_state_is_ui_screen(g_registered_ctx)) {
+        return false;
+    }
+    // Check if player is alive in active game:
+    // Barry = $C3B9 (100 HP), Leon = $C3BA (100 HP), Lucia = $C3BB (120 HP), or weapon inventory at $C3A4
+    if (g_registered_ctx->wram[0xC3B9 - 0xC000] > 0 ||
+        g_registered_ctx->wram[0xC3BA - 0xC000] > 0 ||
+        g_registered_ctx->wram[0xC3BB - 0xC000] > 0 ||
+        g_registered_ctx->wram[0xC3A4 - 0xC000] > 0) {
+        return true;
+    }
+    return false;
+}
+
 static void update_runtime_action_state(GBContext* ctx) {
     const int previous_effective_speed = effective_speed_percent();
 
@@ -1558,6 +1604,23 @@ static void update_runtime_action_state(GBContext* ctx) {
 
     g_fast_forward_active = g_runtime_action_pressed[GB_INPUT_ACTION_FAST_FORWARD];
 
+    // Evaluate Dash / Run state
+    if (g_app_config.dash_mode == 0 || !is_gameplay_active() || is_in_combat_mode()) {
+        g_dash_active = false;
+    } else {
+        const bool is_moving = ((g_joypad_dpad & 0x0F) != 0x0F);
+        if (g_app_config.dash_mode == 2) {
+            // Mode 2: Always Run whenever moving
+            g_dash_active = is_moving;
+        } else {
+            // Mode 1: Hold button to run (dedicated Dash action, Android touch dash, or classic B button)
+            const bool wants_dash = input_action_is_pressed(GB_INPUT_ACTION_DASH) ||
+                                    touch_overlay_is_dash_pressed() ||
+                                    (g_app_config.dash_button_b && g_b_dash_active);
+            g_dash_active = is_moving && wants_dash;
+        }
+    }
+
     if (effective_speed_percent() != previous_effective_speed) {
         reset_audio_output_buffer(true);
     }
@@ -1581,6 +1644,24 @@ static void update_effective_joypad_state(void) {
     rebuild_manual_joypad_state_from_bindings();
     g_joypad_dpad = g_manual_joypad_dpad & g_script_joypad_dpad & touch_overlay_get_dpad_mask();
     g_joypad_buttons = g_manual_joypad_buttons & g_script_joypad_buttons & touch_overlay_get_buttons_mask();
+
+    // Context-sensitive B-button dash handling:
+    // When dash_button_b is enabled and moving, holding B runs rather than opening inventory.
+    if (g_app_config.dash_mode != 0 && g_app_config.dash_button_b && is_gameplay_active() && !is_in_combat_mode()) {
+        const bool is_moving = ((g_joypad_dpad & 0x0F) != 0x0F);
+        const bool b_pressed = input_action_is_pressed(GB_INPUT_ACTION_B) || ((g_joypad_buttons & 0x02) == 0);
+        if (!b_pressed) {
+            g_b_dash_active = false;
+        } else if (is_moving) {
+            g_b_dash_active = true;
+        }
+        if (g_b_dash_active) {
+            g_joypad_buttons |= 0x02; // Suppress B press so inventory menu does not open while dashing
+        }
+    } else {
+        g_b_dash_active = false;
+    }
+
     lighting_update_player_dir(g_joypad_dpad);
 }
 
@@ -2978,7 +3059,53 @@ upload_processed_frame:
                 ImGui::EndTabItem();
             }
 
-            // Tab 6: Cheats
+            // Tab 6: Gameplay & QoL
+            if (ImGui::BeginTabItem("Gameplay")) {
+                ImGui::BeginChild("TabScroll_Gameplay", ImVec2(0.0f, -footer_height), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                ImGui::Spacing();
+                ImGui::Text("Quality of Life Enhancements:");
+                ImGui::Separator();
+
+                // Dash / Run Mode
+                const char* dash_modes[] = { "Disabled (1x Walk Only)", "Hold Button to Run (Recommended)", "Always Run" };
+                int current_dash_mode = g_app_config.dash_mode;
+                if (current_dash_mode < 0 || current_dash_mode > 2) current_dash_mode = 1;
+                if (ImGui::Combo("Dash / Run Mode", &current_dash_mode, dash_modes, IM_ARRAYSIZE(dash_modes))) {
+                    g_app_config.dash_mode = current_dash_mode;
+                    config_save_ini(NULL);
+                }
+
+                // Dash Speed Percent
+                int dash_spd = g_app_config.dash_speed_percent;
+                if (dash_spd < 125 || dash_spd > 250) dash_spd = 200;
+                if (ImGui::SliderInt("Run Speed (% of Normal)", &dash_spd, 125, 250, "%d%%")) {
+                    g_app_config.dash_speed_percent = dash_spd;
+                    config_save_ini(NULL);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Reset (200%)")) {
+                    g_app_config.dash_speed_percent = 200;
+                    config_save_ini(NULL);
+                }
+
+                // B Button Dash Option
+                if (ImGui::Checkbox("Use B Button to Run while Moving", &g_app_config.dash_button_b)) {
+                    config_save_ini(NULL);
+                }
+                ImGui::TextWrapped("When enabled, holding the Game Boy B button (Keyboard X/K, Gamepad A/L1) while moving with the D-Pad causes your character to sprint. "
+                                   "Tapping B while stationary opens the inventory menu as normal.");
+
+                ImGui::Separator();
+                ImGui::TextDisabled("Controls for Dash / Run:");
+                ImGui::BulletText("Keyboard: Hold Left Shift or Right Shift while moving");
+                ImGui::BulletText("Gamepad: Hold R1 / L1 (Shoulder) or hold B while moving");
+                ImGui::BulletText("Combat Safety: 100%% normal speed is automatically preserved during combat, menus, and cutscenes.");
+
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+
+            // Tab 7: Cheats
             if (ImGui::BeginTabItem("Cheats")) {
                 ImGui::BeginChild("TabScroll_Cheats", ImVec2(0.0f, -footer_height), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
                 ImGui::Spacing();
@@ -2994,9 +3121,9 @@ upload_processed_frame:
                 ImGui::Separator();
                 ImGui::TextDisabled("Custom GameShark Codes:");
                 static char custom_name[64] = "My Cheat";
-                static char custom_code[32] = "016404C8";
+                static char custom_code[32] = "910AC1C3";
                 ImGui::InputText("Name", custom_name, sizeof(custom_name));
-                ImGui::InputText("Code (e.g. 016404C8)", custom_code, sizeof(custom_code));
+                ImGui::InputText("Code (e.g. 910AC1C3)", custom_code, sizeof(custom_code));
                 if (ImGui::Button("Add GameShark Code")) {
                     cheats_add_gameshark_code(custom_name, custom_code, true);
                 }
@@ -3016,7 +3143,7 @@ upload_processed_frame:
                 ImGui::EndTabItem();
             }
 
-            // Tab 7: Audio
+            // Tab 8: Audio
             if (ImGui::BeginTabItem("Audio")) {
                 ImGui::BeginChild("TabScroll_Audio", ImVec2(0.0f, -footer_height), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
                 ImGui::Spacing();
@@ -3064,7 +3191,7 @@ upload_processed_frame:
                 ImGui::EndTabItem();
             }
 
-            // Tab 8: Config & INI
+            // Tab 9: Config & INI
             if (ImGui::BeginTabItem("Config & INI")) {
                 ImGui::BeginChild("TabScroll_Config", ImVec2(0.0f, -footer_height), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
                 ImGui::Spacing();

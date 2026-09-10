@@ -10,7 +10,7 @@ extern "C" {
 
 typedef struct {
     char name[64];
-    char code[32]; // e.g. "016404C8"
+    char code[32]; // e.g. "910AC1C3" or "923091D4"
     bool enabled;
 } CustomCheat;
 
@@ -24,7 +24,7 @@ extern int g_custom_cheat_count;
 void cheats_apply_frame(GBContext* ctx);
 
 /**
- * @brief Add a custom GameShark cheat code (format: 01XXYYZZ -> writes XX to address 0xZZYY).
+ * @brief Add a custom GameShark cheat code (format: 01XXYYZZ -> writes XX to 0xZZYY, or 9BXXYYZZ for WRAM bank B).
  */
 bool cheats_add_gameshark_code(const char* name, const char* code_str, bool enabled);
 

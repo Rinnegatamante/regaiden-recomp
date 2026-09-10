@@ -73,6 +73,11 @@ typedef struct {
     bool cheat_all_weapons;
     bool cheat_infinite_items;
 
+    // [Gameplay]
+    int dash_mode;              // 0=Off, 1=Hold to Run, 2=Always Run (default 1)
+    int dash_speed_percent;     // 125 - 250 (default 200 = 2x speed)
+    bool dash_button_b;         // Allow holding B while moving to dash (default true)
+
     // [General]
     char last_rom_path[512];
     bool auto_save_state_on_exit;

@@ -2,6 +2,43 @@
 
 All notable changes to **Resident Evil Gaiden Recompiled** will be documented in this file.
 
+## [v0.4.0] - 2026-09-08
+
+### Quality of Life & Gameplay Enhancements (Windows & Android)
+- **New Configurable Dash / Run System**:
+  - Addresses *Resident Evil Gaiden*'s notoriously slow overworld exploration walking speed by introducing an optional sprint system.
+  - **Context-Sensitive Classic B-Button Dash**: Holding the Game Boy `B` button (Keyboard `X`/`K`, Gamepad `A`/`L1`) while moving with the D-Pad automatically sprints without opening the inventory. Tapping `B` while stationary opens the inventory screen as normal. Can be toggled on/off in the Gameplay settings.
+  - **Dedicated Dash Action**: Bindable in Controls & Mapping for both Keyboard (`Left Shift` and `Right Shift` by default) and Controllers (`R1` and `L1` shoulder buttons by default).
+  - **Android Touch Controls**: Added a dedicated on-screen Dash / Sprint button to the Android touch overlay (`TOUCH_BTN_DASH`), featuring an Electric Blue circular button with a double-chevron `>>` sprint glyph positioned conveniently above the B button.
+  - **Configurable Modes**:
+    - `0 = Disabled (1x Walk Only)`
+    - `1 = Hold Button to Run (Default)`
+    - `2 = Always Run (Whenever Moving)`
+  - **Configurable Speed**: Adjustable from 125% to 250% (Default 200% / 2x speed) with 1-click Reset button.
+  - **Robust Combat & Menu Detection**: Dashing automatically pauses during battle (detected via ROM Banks `0x0D` / `0x0E`), menus / inventory / PDA (`gb_state_is_ui_screen`), and cutscenes, guaranteeing 100% normal combat timing and collision integrity.
+  - **Independent Audio Pacing**: CD audio / music packs continue playing at 100% natural pitch and tempo during dash exploration.
+- **New "Gameplay" Settings Tab**:
+  - Added a dedicated "Gameplay" tab in the ImGui settings window (`F10` or Guide/Home button) to configure Dash modes, speed slider, B-button behavior, and view control hints.
+- **Persistent INI Configuration**:
+  - Saved under `[Gameplay]` in `config.ini` as `dash_mode`, `dash_speed_percent`, and `dash_button_b`.
+
+### Cheats Engine Overhaul (Windows & Android)
+- **Fixed Built-in Cheats Not Working**:
+  - The previous implementation in `src/recompiled/cheats.c` targeted fictional memory addresses (`0xC804`, `0xC824`, `0xC80B`, `0xC910`, `0xC920`) that were never read or written by the game engine.
+  - Re-anchored all built-in cheats to the real, hardware-verified memory map extracted from the original Game Boy Color ROM and disassembly:
+    - **Infinite Health**: Writes to `$C3B9` (Barry, 100 HP), `$C3BA` (Leon, 100 HP), `$C3BB` (Lucia, 120 HP), clears poison flags in `$C3BC..$C3BE` and poison counters at `$C3D0..$C3D2`, and syncs the UI health mirror in WRAM Bank 2 (`$D491`).
+    - **Infinite Ammo**: Writes max ammo (99) to the 5 real weapon ammo pools at `$C3C1` (Handgun), `$C3C2` (Shotgun), `$C3C3` (Grenade Launcher), `$C3C4` (Assault Rifle), and `$C3C5` (Rocket Launcher).
+    - **Unlock All Weapons**: Sets ownership bitmasks at `$C3A4..$C3A6` and sets knife/handgun inventory bytes at `$C3BF..$C3C0`.
+    - **Infinite Items & First Aid Sprays**: Sets recovery item ownership bitmasks at `$C3A7..$C3A8` and max quantities (9) for First Aid Sprays (`$C3CD`), Green Herbs (`$C3CB`), Red Herbs (`$C3CC`), and Armor (`$C3CE..$C3CF`).
+    - **Freeze Combat Reticle / Always Perfect Hit**: Detects active combat via battle engine ROM banks `0x0D` and `0x0E`, locks the reticle position to the target center (`$72` midpoint or dynamic target entity `$C22D`), mirrors it to `$C2E9` and Bank 1 entity offset `0x8F`, syncs 12.4 fixed-point coordinates at offset `0x32..0x33` and screen sprite coordinates at `0x3A..0x3B` (`target_x + 0xB0` on reticle entity, `$CBCD`, and `$CBCE`), locks hit check outcome `$CBD3` to `0x00` (perfect/critical hit, never `$FF` miss), sets `$CBD4` to `0x01` (hit success), sets the critical hit flag bit 3 in `$CBCB`, zeroes the 9-byte hit lookup map at `$CBE0..$CBE8` in WRAM0, and sets `$C186` to 2.
+    - **One-Hit Kill in Battle**: Hooked directly into the combat damage dispatchers and calculation instructions: `pc_44e3` (the central weapon attack damage caller in `funcs_28.c`), `loc_0d_49c2` (Type 1 Zombie `SUB E` damage instruction), and `loc_0d_5f8e` (Type 2 Zombie `SUB E` damage instruction), forcing weapon damage `ctx->e = 0xFF` (255 damage) whenever the cheat is enabled. Guarantees carry borrow and immediate branch to death routines (`loc_0d_49c9` and `loc_0d_5f95`) on the very first hit with any weapon (knife, handgun, shotgun, grenade launcher, assault rifle, rocket launcher). Also continuously clamps living enemy HP to 1 in both WRAM Bank 1 and Bank 4 across active enemy slots `$C228..$C22B` and slots `$D0..$DF`.
+  - Added safety guard to only apply cheats once active gameplay memory is initialized (`ctx->wram[0x03A4] != 0` or `$C3B9 != 0`), preventing corruption of boot/title screen state.
+- **Fixed GameShark Code Support**:
+  - `apply_gameshark_code` previously rejected any code not starting with `01`, completely breaking standard Game Boy Color GameShark codes starting with `9x` (e.g. `910AC1C3`, `923091D4`).
+  - Added support for Game Boy Color banked GameShark codes (`9B` prefix where `B` selects WRAM Bank 1-7).
+  - Sanitized code string input to strip spaces, hyphens, and delimiters automatically (e.g. `910A-C1C3` or `9230 91D4`).
+  - Updated ImGui UI placeholder in `platform_sdl.cpp` to use real Game Boy Color code syntax.
+
 ## [v0.3.1] - 2026-08-29
 
 ### Asset Packs on Android

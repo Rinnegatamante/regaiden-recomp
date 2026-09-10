@@ -91,6 +91,11 @@ void config_set_defaults(AppConfig* cfg) {
     cfg->cheat_all_weapons = false;
     cfg->cheat_infinite_items = false;
 
+    // [Gameplay]
+    cfg->dash_mode = 1;         // 1 = Hold Button to Run (default)
+    cfg->dash_speed_percent = 200; // 200 = 2x speed
+    cfg->dash_button_b = true;
+
     // [General]
     cfg->last_rom_path[0] = '\0';
     cfg->auto_save_state_on_exit = false;
@@ -199,6 +204,10 @@ bool config_load_ini(const char* file_path) {
             else if (strcmp(key, "freeze_reticle") == 0) g_app_config.cheat_freeze_reticle = (atoi(val) != 0 || strcmp(val, "true") == 0);
             else if (strcmp(key, "all_weapons") == 0) g_app_config.cheat_all_weapons = (atoi(val) != 0 || strcmp(val, "true") == 0);
             else if (strcmp(key, "infinite_items") == 0) g_app_config.cheat_infinite_items = (atoi(val) != 0 || strcmp(val, "true") == 0);
+        } else if (strcmp(section, "Gameplay") == 0) {
+            if (strcmp(key, "dash_mode") == 0) g_app_config.dash_mode = atoi(val);
+            else if (strcmp(key, "dash_speed_percent") == 0) g_app_config.dash_speed_percent = atoi(val);
+            else if (strcmp(key, "dash_button_b") == 0) g_app_config.dash_button_b = (atoi(val) != 0 || strcmp(val, "true") == 0);
         } else if (strcmp(section, "General") == 0) {
             if (strcmp(key, "last_rom_path") == 0) {
                 strncpy(g_app_config.last_rom_path, val, sizeof(g_app_config.last_rom_path) - 1);
@@ -281,6 +290,11 @@ bool config_save_ini(const char* file_path) {
     fprintf(f, "freeze_reticle=%d\n", g_app_config.cheat_freeze_reticle ? 1 : 0);
     fprintf(f, "all_weapons=%d\n", g_app_config.cheat_all_weapons ? 1 : 0);
     fprintf(f, "infinite_items=%d\n\n", g_app_config.cheat_infinite_items ? 1 : 0);
+
+    fprintf(f, "[Gameplay]\n");
+    fprintf(f, "dash_mode=%d\n", g_app_config.dash_mode);
+    fprintf(f, "dash_speed_percent=%d\n", g_app_config.dash_speed_percent);
+    fprintf(f, "dash_button_b=%d\n\n", g_app_config.dash_button_b ? 1 : 0);
 
     fprintf(f, "[General]\n");
     fprintf(f, "last_rom_path=%s\n", g_app_config.last_rom_path);
