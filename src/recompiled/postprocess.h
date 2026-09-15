@@ -36,6 +36,7 @@ typedef struct {
 extern PostProcessConfig g_postprocess_config;
 
 void postprocess_init(void);
+void postprocess_apply_color_grade(GBContext* ctx, uint32_t* framebuffer, int width, int height);
 void postprocess_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height);
 
 #ifdef __cplusplus

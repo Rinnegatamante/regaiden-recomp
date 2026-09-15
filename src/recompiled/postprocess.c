@@ -69,6 +69,49 @@ void postprocess_init(void) {
     s_vig_cached_int = -1;
 }
 
+void postprocess_apply_color_grade(GBContext* ctx, uint32_t* framebuffer, int width, int height) {
+    (void)ctx;
+    if (!framebuffer || width <= 0 || height <= 0 || g_postprocess_config.color_grade == COLOR_GRADE_OFF) {
+        return;
+    }
+
+    const ColorGradeMode grade = g_postprocess_config.color_grade;
+    for (int i = 0; i < width * height; ++i) {
+        uint32_t p = framebuffer[i];
+        int r = (p >> 16) & 0xFF;
+        int g = (p >> 8) & 0xFF;
+        int b = p & 0xFF;
+
+        if (grade == COLOR_GRADE_COLD_BIOHAZARD) {
+            int lum = (r * 30 + g * 59 + b * 11) >> 8;
+            r = ((r * 192 + lum * 64) >> 8) - 5;
+            g = (g * 217 + lum * 38) >> 8;
+            b = ((b * 204 + lum * 51) >> 8) + 15;
+        } else if (grade == COLOR_GRADE_BLEACH_BYPASS) {
+            int lum = (r * 30 + g * 59 + b * 11) >> 8;
+            r = (r + lum) >> 1;
+            g = (g + lum) >> 1;
+            b = (b + lum) >> 1;
+            r = (r < 128) ? ((r * r) >> 7) : (255 - (((255 - r) * (255 - r)) >> 7));
+            g = (g < 128) ? ((g * g) >> 7) : (255 - (((255 - g) * (255 - g)) >> 7));
+            b = (b < 128) ? ((b * b) >> 7) : (255 - (((255 - b) * (255 - b)) >> 7));
+        } else if (grade == COLOR_GRADE_SEPIA_RETRO) {
+            int lum = (r * 30 + g * 59 + b * 11) >> 8;
+            r = lum + 25;
+            g = lum + 10;
+            b = lum - 20;
+        } else if (grade == COLOR_GRADE_MONOCHROME) {
+            int lum = (r * 30 + g * 59 + b * 11) >> 8;
+            r = lum;
+            g = lum;
+            b = lum;
+        }
+
+        framebuffer[i] = 0xFF000000u | ((uint32_t)clamp_u8(r) << 16) |
+                         ((uint32_t)clamp_u8(g) << 8) | (uint32_t)clamp_u8(b);
+    }
+}
+
 void postprocess_apply(GBContext* ctx, uint32_t* framebuffer, int width, int height) {
     (void)ctx;
     if (!framebuffer || width <= 0 || height <= 0) {

@@ -1450,6 +1450,10 @@ static void set_savestate_status(const char* action, int slot, bool success, con
 
 static bool recreate_streaming_texture(void);
 static void set_app_suspended(bool suspended);
+#if defined(__VITA__)
+static void vita_gpu_effects_render(GBContext* ctx, int render_w, int render_h, uint32_t frame_number);
+static void vita_gpu_effects_shutdown(void);
+#endif
 
 static bool frame_is_selected_for_dump(const uint32_t* frames, int count, uint32_t frame) {
     for (int i = 0; i < count; i++) {
@@ -2630,6 +2634,11 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
         }
     }
 
+#if defined(__VITA__)
+    if (g_postprocess_config.color_grade != COLOR_GRADE_OFF) {
+        postprocess_apply_color_grade(g_registered_ctx, s_processed_framebuffer, render_w, render_h);
+    }
+#else
     /* 1. Apply Dynamic 2D Flashlight Lighting & Ambient Darkness */
     if (g_registered_ctx) {
         lighting_apply(g_registered_ctx, s_processed_framebuffer, render_w, render_h);
@@ -2637,6 +2646,7 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
 
     /* 3. Apply Atmospheric Retro Horror Shaders (Vignette, Film Grain, Scanlines, CRT, Color Grade) */
     postprocess_apply(g_registered_ctx, s_processed_framebuffer, render_w, render_h);
+#endif
 
     s_processed_valid = true;
     s_processed_w = render_w;
@@ -2675,6 +2685,10 @@ upload_processed_frame:
     SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_renderer);
     SDL_RenderCopy(g_renderer, g_texture, NULL, &g_game_viewport);
+
+#if defined(__VITA__)
+    vita_gpu_effects_render(g_registered_ctx, render_w, render_h, (uint32_t)g_frame_count);
+#endif
 
     /* Render host-resolution HD texture overlays (Battle BG, Monsters, Dialog Portraits) */
     if (g_registered_ctx) {
@@ -3353,14 +3367,229 @@ upload_processed_frame:
 }
 
 #if defined(__VITA__)
+static SDL_Texture* g_vita_light_mod_texture = NULL;
+static SDL_Texture* g_vita_post_mod_texture = NULL;
+static SDL_Texture* g_vita_grain_texture = NULL;
+static int g_vita_light_mod_w = 0;
+static int g_vita_light_mod_h = 0;
+static int g_vita_post_mod_w = 0;
+static int g_vita_post_mod_h = 0;
+static int g_vita_grain_w = 0;
+static int g_vita_grain_h = 0;
+static uint64_t g_vita_light_signature = 0;
+static uint64_t g_vita_post_signature = 0;
+static uint32_t g_vita_grain_last_frame = UINT32_MAX;
+static uint32_t g_vita_grain_seed = 0x6D2B79F5u;
+static uint32_t g_vita_light_pixels[GB_MAX_FRAMEBUFFER_SIZE];
+static uint32_t g_vita_post_pixels[GB_MAX_FRAMEBUFFER_SIZE];
+static uint32_t g_vita_grain_pixels[GB_MAX_FRAMEBUFFER_SIZE];
+
+static uint64_t vita_gpu_hash_mix(uint64_t value, uint64_t next) {
+    value ^= next + 0x9E3779B97F4A7C15ull + (value << 6) + (value >> 2);
+    return value;
+}
+
+static bool vita_gpu_ensure_effect_texture(SDL_Texture** texture, int* texture_w, int* texture_h,
+                                           int width, int height, SDL_BlendMode blend_mode) {
+    if (*texture && (*texture_w != width || *texture_h != height)) {
+        SDL_DestroyTexture(*texture);
+        *texture = NULL;
+    }
+    if (!*texture) {
+        *texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ARGB8888,
+                                     SDL_TEXTUREACCESS_STATIC, width, height);
+        if (!*texture) return false;
+        *texture_w = width;
+        *texture_h = height;
+        SDL_SetTextureScaleMode(*texture, SDL_ScaleModeNearest);
+    }
+    SDL_SetTextureBlendMode(*texture, blend_mode);
+    return true;
+}
+
+static uint64_t vita_gpu_post_signature(int width, int height) {
+    uint64_t sig = 0xBADC0FFEE0DDF00Dull;
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)width);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)height);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)g_postprocess_config.vignette_enabled);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_postprocess_config.vignette_intensity);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)g_postprocess_config.scanlines_enabled);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_postprocess_config.scanline_intensity);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)g_postprocess_config.crt_mask_enabled);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_postprocess_config.crt_mask_intensity);
+    return sig;
+}
+
+static bool vita_gpu_build_post_modulation(int width, int height) {
+    const bool vig_on = g_postprocess_config.vignette_enabled && g_postprocess_config.vignette_intensity > 0;
+    const bool scan_on = g_postprocess_config.scanlines_enabled && g_postprocess_config.scanline_intensity > 0;
+    const bool crt_on = g_postprocess_config.crt_mask_enabled && g_postprocess_config.crt_mask_intensity > 0;
+    if (!vig_on && !scan_on && !crt_on) return false;
+
+    const int cx = width / 2;
+    const int cy = height / 2;
+    const int max_radius_sq = cx * cx + cy * cy;
+    const int scan_factor = scan_on ? 256 - (g_postprocess_config.scanline_intensity * 128 / 100) : 256;
+    const int crt_factor = crt_on ? 256 - (g_postprocess_config.crt_mask_intensity * 80 / 100) : 256;
+
+    for (int y = 0; y < height; ++y) {
+        int vignette_factor = 256;
+        const int dy = y - cy;
+        const int row_scan = ((y & 1) && scan_on) ? scan_factor : 256;
+        for (int x = 0; x < width; ++x) {
+            if (vig_on) {
+                const int dx = x - cx;
+                const int dist_sq = dx * dx + dy * dy;
+                int loss = max_radius_sq > 0
+                    ? (int)(((int64_t)dist_sq * g_postprocess_config.vignette_intensity * 256) /
+                            ((int64_t)max_radius_sq * 100))
+                    : 0;
+                vignette_factor = 256 - loss;
+                if (vignette_factor < 51) vignette_factor = 51;
+                if (vignette_factor > 256) vignette_factor = 256;
+            }
+
+            int r = (row_scan * vignette_factor) >> 8;
+            int g = r;
+            int b = r;
+            if (crt_on) {
+                const int subpix = x % 3;
+                if (subpix != 0) r = (r * crt_factor) >> 8;
+                if (subpix != 1) g = (g * crt_factor) >> 8;
+                if (subpix != 2) b = (b * crt_factor) >> 8;
+            }
+
+            const uint8_t rr = (uint8_t)(r >= 256 ? 255 : r);
+            const uint8_t gg = (uint8_t)(g >= 256 ? 255 : g);
+            const uint8_t bb = (uint8_t)(b >= 256 ? 255 : b);
+            g_vita_post_pixels[(size_t)y * (size_t)width + (size_t)x] =
+                0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | bb;
+        }
+    }
+    return true;
+}
+
+static uint64_t vita_gpu_light_signature(GBContext* ctx, int width, int height) {
+    uint64_t sig = 0x13579BDF2468ACE0ull;
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)width);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)height);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)lighting_get_player_dir());
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_lighting_config.intensity);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_lighting_config.ambient_darkness);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_lighting_config.cone_angle_deg);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)g_lighting_config.cone_distance);
+    int light_x = width / 2;
+    int light_y = height / 2;
+    lighting_get_player_screen_position(ctx, width, height, &light_x, &light_y);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)light_x);
+    sig = vita_gpu_hash_mix(sig, (uint64_t)(uint32_t)light_y);
+    return sig;
+}
+
+static uint32_t vita_gpu_xorshift(void) {
+    uint32_t x = g_vita_grain_seed;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    g_vita_grain_seed = x;
+    return x;
+}
+
+static void vita_gpu_render_grain(int width, int height, uint32_t frame_number) {
+    if (!g_postprocess_config.film_grain_enabled || g_postprocess_config.grain_intensity <= 0) return;
+    if (!vita_gpu_ensure_effect_texture(&g_vita_grain_texture, &g_vita_grain_w, &g_vita_grain_h,
+                                        width, height, SDL_BLENDMODE_BLEND)) return;
+
+    if (g_vita_grain_last_frame == UINT32_MAX ||
+        (frame_number != g_vita_grain_last_frame && (frame_number & 1u) == 0u)) {
+        const int amplitude = g_postprocess_config.grain_intensity * 30 / 100;
+        for (int i = 0; i < width * height; ++i) {
+            const int raw = (int)(vita_gpu_xorshift() & 63u) - 31;
+            const int noise = (raw * amplitude) / 31;
+            int alpha = noise < 0 ? -noise : noise;
+            alpha *= 2;
+            if (alpha > 255) alpha = 255;
+            const uint32_t rgb = noise < 0 ? 0x000000u : 0xFFFFFFu;
+            g_vita_grain_pixels[i] = ((uint32_t)alpha << 24) | rgb;
+        }
+        SDL_UpdateTexture(g_vita_grain_texture, NULL, g_vita_grain_pixels, width * (int)sizeof(uint32_t));
+        g_vita_grain_last_frame = frame_number;
+    }
+
+    SDL_RenderCopy(g_renderer, g_vita_grain_texture, NULL, &g_game_viewport);
+}
+
+static void vita_gpu_effects_render(GBContext* ctx, int render_w, int render_h, uint32_t frame_number) {
+    if (!g_renderer || render_w <= 0 || render_h <= 0 ||
+        render_w * render_h > GB_MAX_FRAMEBUFFER_SIZE) return;
+
+    if (ctx && lighting_is_active(ctx)) {
+        const uint64_t sig = vita_gpu_light_signature(ctx, render_w, render_h);
+        if (vita_gpu_ensure_effect_texture(&g_vita_light_mod_texture, &g_vita_light_mod_w,
+                                           &g_vita_light_mod_h, render_w, render_h, SDL_BLENDMODE_MOD)) {
+            if (sig != g_vita_light_signature) {
+                if (lighting_build_modulation_mask(ctx, g_vita_light_pixels, render_w, render_h)) {
+                    SDL_UpdateTexture(g_vita_light_mod_texture, NULL, g_vita_light_pixels,
+                                      render_w * (int)sizeof(uint32_t));
+                    g_vita_light_signature = sig;
+                }
+            }
+            if (g_vita_light_signature == sig) {
+                SDL_RenderCopy(g_renderer, g_vita_light_mod_texture, NULL, &g_game_viewport);
+            }
+        }
+    }
+
+    const bool post_mod_on =
+        (g_postprocess_config.vignette_enabled && g_postprocess_config.vignette_intensity > 0) ||
+        (g_postprocess_config.scanlines_enabled && g_postprocess_config.scanline_intensity > 0) ||
+        (g_postprocess_config.crt_mask_enabled && g_postprocess_config.crt_mask_intensity > 0);
+    if (post_mod_on) {
+        const uint64_t sig = vita_gpu_post_signature(render_w, render_h);
+        if (vita_gpu_ensure_effect_texture(&g_vita_post_mod_texture, &g_vita_post_mod_w,
+                                           &g_vita_post_mod_h, render_w, render_h, SDL_BLENDMODE_MOD)) {
+            if (sig != g_vita_post_signature && vita_gpu_build_post_modulation(render_w, render_h)) {
+                SDL_UpdateTexture(g_vita_post_mod_texture, NULL, g_vita_post_pixels,
+                                  render_w * (int)sizeof(uint32_t));
+                g_vita_post_signature = sig;
+            }
+            if (g_vita_post_signature == sig) {
+                SDL_RenderCopy(g_renderer, g_vita_post_mod_texture, NULL, &g_game_viewport);
+            }
+        }
+    }
+
+    vita_gpu_render_grain(render_w, render_h, frame_number);
+}
+
+static void vita_gpu_effects_shutdown(void) {
+    if (g_vita_light_mod_texture) SDL_DestroyTexture(g_vita_light_mod_texture);
+    if (g_vita_post_mod_texture) SDL_DestroyTexture(g_vita_post_mod_texture);
+    if (g_vita_grain_texture) SDL_DestroyTexture(g_vita_grain_texture);
+    g_vita_light_mod_texture = NULL;
+    g_vita_post_mod_texture = NULL;
+    g_vita_grain_texture = NULL;
+    g_vita_light_mod_w = g_vita_light_mod_h = 0;
+    g_vita_post_mod_w = g_vita_post_mod_h = 0;
+    g_vita_grain_w = g_vita_grain_h = 0;
+    g_vita_light_signature = 0;
+    g_vita_post_signature = 0;
+    g_vita_grain_last_frame = UINT32_MAX;
+}
+
 enum VitaAsyncRenderSlotState {
     VITA_ASYNC_SLOT_FREE = 0,
+    VITA_ASYNC_SLOT_PREPARING,
     VITA_ASYNC_SLOT_READY,
     VITA_ASYNC_SLOT_RENDERING,
 };
 
 struct VitaAsyncRenderSlot {
-    uint32_t framebuffer[GB_FRAMEBUFFER_SIZE];
+    uint32_t framebuffer[GB_MAX_FRAMEBUFFER_SIZE];
+    uint32_t light_mask[GB_MAX_FRAMEBUFFER_SIZE];
+    int width;
+    int height;
+    bool light_mask_active;
     uint32_t frame_number;
     uint64_t sequence;
     VitaAsyncRenderSlotState state;
@@ -3420,8 +3649,8 @@ static int vita_async_render_worker(void*) {
         if (SDL_LockTexture(g_texture, NULL, &pixels, &pitch) == 0 && pixels) {
             const uint8_t* src = (const uint8_t*)slot.framebuffer;
             uint8_t* dst = (uint8_t*)pixels;
-            const size_t row_bytes = GB_SCREEN_WIDTH * sizeof(uint32_t);
-            for (int y = 0; y < GB_SCREEN_HEIGHT; ++y) {
+            const size_t row_bytes = (size_t)slot.width * sizeof(uint32_t);
+            for (int y = 0; y < slot.height; ++y) {
                 memcpy(dst + (size_t)y * (size_t)pitch,
                        src + (size_t)y * row_bytes,
                        row_bytes);
@@ -3434,6 +3663,15 @@ static int vita_async_render_worker(void*) {
         SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
         SDL_RenderClear(g_renderer);
         SDL_RenderCopy(g_renderer, g_texture, NULL, &g_game_viewport);
+        if (slot.light_mask_active &&
+            vita_gpu_ensure_effect_texture(&g_vita_light_mod_texture, &g_vita_light_mod_w,
+                                           &g_vita_light_mod_h, slot.width, slot.height, SDL_BLENDMODE_MOD)) {
+            SDL_UpdateTexture(g_vita_light_mod_texture, NULL, slot.light_mask,
+                              slot.width * (int)sizeof(uint32_t));
+            SDL_RenderCopy(g_renderer, g_vita_light_mod_texture, NULL, &g_game_viewport);
+        }
+        vita_gpu_effects_render(NULL, slot.width, slot.height, slot.frame_number);
+        mask_widescreen_side_bands();
         timing.compose_ms = sdl_now_ms() - compose_start;
 
         const double present_start = sdl_now_ms();
@@ -3528,6 +3766,7 @@ static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t fram
         for (int i = 0; i < VITA_ASYNC_RENDER_SLOT_COUNT; ++i) {
             if (g_vita_async_render_slots[i].state == VITA_ASYNC_SLOT_FREE) {
                 slot_index = i;
+                g_vita_async_render_slots[i].state = VITA_ASYNC_SLOT_PREPARING;
                 break;
             }
         }
@@ -3535,10 +3774,25 @@ static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t fram
             SDL_CondWait(g_vita_async_render_free_cond, g_vita_async_render_mutex);
         }
     }
+    SDL_UnlockMutex(g_vita_async_render_mutex);
 
     VitaAsyncRenderSlot& slot = g_vita_async_render_slots[slot_index];
-    memcpy(slot.framebuffer, framebuffer, sizeof(slot.framebuffer));
+    int render_w = GB_SCREEN_WIDTH;
+    int render_h = GB_SCREEN_HEIGHT;
+    if (g_app_config.widescreen_mode != ASPECT_NATIVE_10_9 && g_registered_ctx) {
+        widescreen_render_frame(g_registered_ctx, framebuffer, slot.framebuffer, &render_w, &render_h);
+    } else {
+        memcpy(slot.framebuffer, framebuffer, GB_FRAMEBUFFER_SIZE * sizeof(uint32_t));
+    }
+
+    slot.width = render_w;
+    slot.height = render_h;
+    slot.light_mask_active = g_registered_ctx
+        ? lighting_build_modulation_mask(g_registered_ctx, slot.light_mask, render_w, render_h)
+        : false;
     slot.frame_number = frame_number;
+
+    SDL_LockMutex(g_vita_async_render_mutex);
     slot.sequence = g_vita_async_render_next_sequence++;
     slot.state = VITA_ASYNC_SLOT_READY;
     SDL_CondSignal(g_vita_async_render_work_cond);
@@ -3546,16 +3800,13 @@ static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t fram
 }
 
 static bool vita_async_render_can_use(void) {
+    const int target_w = widescreen_get_target_width();
+    const int target_h = widescreen_get_target_height();
     if (g_benchmark_mode || g_app_suspended || !g_renderer || !g_texture ||
         g_renderer_reset_pending ||
-        g_texture_width != GB_SCREEN_WIDTH || g_texture_height != GB_SCREEN_HEIGHT ||
-        g_app_config.widescreen_mode != ASPECT_NATIVE_10_9 || g_palette_idx != 0 ||
+        g_texture_width != target_w || g_texture_height != target_h ||
+        g_palette_idx != 0 ||
         g_show_menu || g_show_overlay ||
-        g_lighting_config.enabled ||
-        g_postprocess_config.vignette_enabled ||
-        g_postprocess_config.film_grain_enabled ||
-        g_postprocess_config.scanlines_enabled ||
-        g_postprocess_config.crt_mask_enabled ||
         g_postprocess_config.color_grade != COLOR_GRADE_OFF ||
         g_hd_pack_config.enabled || g_touch_overlay_config.enabled ||
         (g_port_frame_valid && g_port_frame.command_count != 0) ||
@@ -3574,6 +3825,7 @@ static bool vita_async_render_can_use(void) {
 void gb_platform_shutdown(void) {
 #if defined(__VITA__)
     vita_async_render_shutdown();
+    vita_gpu_effects_shutdown();
 #endif
     hd_pack_shutdown();
     music_pack_shutdown();
