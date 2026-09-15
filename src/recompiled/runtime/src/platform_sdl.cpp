@@ -40,6 +40,7 @@
 #include "config_ini.h"
 #include "cheats.h"
 #include "widescreen_ppu.h"
+#include "voxelizer.h"
 #include "rom_loader.h"
 #include "lighting.h"
 #include "postprocess.h"
@@ -1095,6 +1096,7 @@ static void load_runtime_preferences(void) {
         }
     }
     config_load_ini(NULL);
+    voxelizer_sync_config();
     {
         /* Snapshots exist to be copied off the device and inspected, so on
          * Android they go to external app storage (/sdcard/Android/data/<pkg>/
@@ -1448,7 +1450,7 @@ static void set_savestate_status(const char* action, int slot, bool success, con
     g_savestate_status = message;
 }
 
-static bool recreate_streaming_texture(void);
+static bool recreate_streaming_texture(int target_w = 0, int target_h = 0);
 static void set_app_suspended(bool suspended);
 #if defined(__VITA__)
 static void vita_gpu_effects_render(GBContext* ctx, int render_w, int render_h, uint32_t frame_number);
@@ -2041,6 +2043,7 @@ static int round_to_int(double value) {
 }
 
 static void mask_widescreen_side_bands(void) {
+    if (voxelizer_get_stats()->active) return;
     if (!g_renderer || g_app_config.widescreen_mode != ASPECT_WIDESCREEN_16_9) return;
     if (g_game_viewport.w <= 0 || g_game_viewport.h <= 0 || GB_WIDESCREEN_SIDE_BAND_WIDTH <= 0) return;
 
@@ -2077,6 +2080,10 @@ static void update_render_filter(void) {
 static void update_game_viewport(void) {
     int target_w = widescreen_get_target_width();
     int target_h = widescreen_get_target_height();
+    if (voxelizer_get_stats()->active) {
+        target_w = voxelizer_get_stats()->width;
+        target_h = voxelizer_get_stats()->height;
+    }
 
     if (!g_window) {
         g_game_viewport.x = 0;
@@ -2203,33 +2210,29 @@ static void set_fullscreen_enabled(bool enabled) {
     update_game_viewport();
 }
 
-static bool recreate_streaming_texture(void) {
+static bool recreate_streaming_texture(int target_w, int target_h) {
     if (!g_renderer || g_benchmark_mode) {
         return true;
     }
 
-    if (g_texture) {
-        SDL_DestroyTexture(g_texture);
-        g_texture = NULL;
-    }
-
-    int target_w = widescreen_get_target_width();
-    int target_h = widescreen_get_target_height();
-    g_texture_width = target_w;
-    g_texture_height = target_h;
-
-    g_texture = SDL_CreateTexture(
+    if (target_w <= 0) target_w = voxelizer_get_stats()->active ? voxelizer_get_stats()->width : widescreen_get_target_width();
+    if (target_h <= 0) target_h = voxelizer_get_stats()->active ? voxelizer_get_stats()->height : widescreen_get_target_height();
+    SDL_Texture* replacement = SDL_CreateTexture(
         g_renderer,
         SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING,
         target_w,
         target_h
     );
-    if (!g_texture) {
+    if (!replacement) {
         fprintf(stderr, "[SDL] Failed to recreate texture: %s\n", SDL_GetError());
         return false;
     }
 
+    if (g_texture) SDL_DestroyTexture(g_texture);
+    g_texture = replacement;
+    g_texture_width = target_w;
+    g_texture_height = target_h;
     update_render_filter();
     g_renderer_reset_pending = false;
     return true;
@@ -2586,7 +2589,10 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
     /* Render widescreen or native frame */
     int render_w = GB_SCREEN_WIDTH;
     int render_h = GB_SCREEN_HEIGHT;
-    if (g_app_config.widescreen_mode != ASPECT_NATIVE_10_9 && g_registered_ctx) {
+    if (g_app_config.voxelizer_enabled != g_voxelizer_capture_enabled) voxelizer_sync_config();
+    const uint32_t* voxel_pixels = voxelizer_render_frame(g_registered_ctx, framebuffer, &render_w, &render_h, count_guest_frame);
+    const bool voxel_active = voxel_pixels != NULL;
+    if (!voxel_active && g_app_config.widescreen_mode != ASPECT_NATIVE_10_9 && g_registered_ctx) {
         widescreen_render_frame(g_registered_ctx, framebuffer, g_wide_framebuffer, &render_w, &render_h);
         framebuffer = g_wide_framebuffer;
     }
@@ -2595,6 +2601,8 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
     static bool s_processed_valid = false;
     static int s_processed_w = 0;
     static int s_processed_h = 0;
+    const uint32_t* upload_framebuffer = voxel_active ? voxel_pixels : s_processed_framebuffer;
+    if (voxel_active) s_processed_valid = false;
 
     /*
      * Extra presents (smooth LCD transitions) repaint the *previous* completed
@@ -2609,9 +2617,7 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
         count_guest_frame || !s_processed_valid ||
         s_processed_w != render_w || s_processed_h != render_h;
 
-    if (!recompose) {
-        goto upload_processed_frame;
-    }
+    if (!voxel_active && recompose) {
 
     if (g_palette_idx == 0 || g_app_config.widescreen_mode != ASPECT_NATIVE_10_9) {
         memcpy(s_processed_framebuffer, framebuffer, render_w * render_h * sizeof(uint32_t));
@@ -2651,6 +2657,7 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
     s_processed_valid = true;
     s_processed_w = render_w;
     s_processed_h = render_h;
+    }
 
     /* The composed frame - what is actually on screen - as opposed to the raw
      * guest framebuffer that --dump-frames writes. */
@@ -2660,12 +2667,11 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
         char suffix[48];
         snprintf(suffix, sizeof(suffix), "_composed_%05d.ppm", g_frame_count);
         const std::string filename = g_screenshot_prefix + suffix;
-        save_ppm(filename.c_str(), s_processed_framebuffer, render_w, render_h, g_frame_count);
+        save_ppm(filename.c_str(), upload_framebuffer, render_w, render_h, g_frame_count);
     }
 
-upload_processed_frame:
     if (!g_texture || g_texture_width != render_w || g_texture_height != render_h) {
-        recreate_streaming_texture();
+        if (!recreate_streaming_texture(render_w, render_h)) return;
         update_game_viewport();
     }
 
@@ -2673,9 +2679,11 @@ upload_processed_frame:
     double upload_start_ms = sdl_now_ms();
     void* pixels;
     int pitch;
-    SDL_LockTexture(g_texture, NULL, &pixels, &pitch);
-
-    memcpy(pixels, s_processed_framebuffer, render_w * render_h * sizeof(uint32_t));
+    if (SDL_LockTexture(g_texture, NULL, &pixels, &pitch) != 0) return;
+    for (int y = 0; y < render_h; ++y) {
+        memcpy((uint8_t*)pixels + (size_t)y * pitch,
+               upload_framebuffer + (size_t)y * render_w, (size_t)render_w * sizeof(uint32_t));
+    }
 
     SDL_UnlockTexture(g_texture);
     g_last_timing.upload_ms = sdl_now_ms() - upload_start_ms;
@@ -2687,11 +2695,11 @@ upload_processed_frame:
     SDL_RenderCopy(g_renderer, g_texture, NULL, &g_game_viewport);
 
 #if defined(__VITA__)
-    vita_gpu_effects_render(g_registered_ctx, render_w, render_h, (uint32_t)g_frame_count);
+    if (!voxel_active) vita_gpu_effects_render(g_registered_ctx, render_w, render_h, (uint32_t)g_frame_count);
 #endif
 
     /* Render host-resolution HD texture overlays (Battle BG, Monsters, Dialog Portraits) */
-    if (g_registered_ctx) {
+    if (g_registered_ctx && !voxel_active) {
         hd_pack_render_host_overlay(g_registered_ctx, g_renderer, g_game_viewport.x, g_game_viewport.y, g_game_viewport.w, g_game_viewport.h);
     }
 
@@ -2755,6 +2763,7 @@ upload_processed_frame:
                             gb_context_load_rom(g_registered_ctx, g_rom_data, g_rom_size);
                             g_registered_ctx->mbc_type = g_rom_data[0x147];
                             gb_context_reset(g_registered_ctx, true);
+                            voxelizer_reset();
                         }
                     }
                 }
@@ -2864,6 +2873,49 @@ upload_processed_frame:
                     g_app_config.vsync = g_vsync;
                     config_save_ini(NULL);
                 }
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Voxelizer 3D")) {
+                ImGui::BeginChild("TabScroll_Voxelizer", ImVec2(0.0f, -footer_height), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                ImGui::Spacing();
+                bool changed = ImGui::Checkbox("Enable voxelized exploration", &g_app_config.voxelizer_enabled);
+                ImGui::TextWrapped("Real 3D geometry from the game's collision masks. Menus, dialogue and combat retain the original 2D interface. The 2D flashlight and screen-space shaders are bypassed in 3D.");
+                const char* qualities[] = {"Performance (320x180)", "Detailed (480x272)"};
+                changed |= ImGui::Combo("Voxel resolution", &g_app_config.voxelizer_quality, qualities, IM_ARRAYSIZE(qualities));
+                changed |= ImGui::SliderInt("Camera elevation", &g_app_config.voxelizer_pitch, 35, 85, "%d deg");
+                changed |= ImGui::SliderInt("Camera rotation", &g_app_config.voxelizer_yaw, -45, 45, "%d deg");
+                changed |= ImGui::SliderInt("Camera zoom", &g_app_config.voxelizer_zoom, 100, 200, "%d%%");
+                changed |= ImGui::SliderInt("Default wall height", &g_app_config.voxelizer_wall_height, 4, 64, "%d px");
+                changed |= ImGui::SliderInt("Default object height", &g_app_config.voxelizer_prop_height, 2, 32, "%d px");
+                changed |= ImGui::Checkbox("Contact and directional shadows", &g_app_config.voxelizer_shadows);
+                changed |= ImGui::Checkbox("Reveal player behind foreground walls", &g_app_config.voxelizer_cutaway);
+                if (ImGui::Button("Reset 3D camera")) {
+                    g_app_config.voxelizer_pitch = 55;
+                    g_app_config.voxelizer_yaw = -12;
+                    g_app_config.voxelizer_zoom = 110;
+                    changed = true;
+                }
+                if (changed) {
+                    voxelizer_sync_config();
+                    config_save_ini(NULL);
+                }
+                ImGui::Separator();
+                const VoxelizerStats* stats = voxelizer_get_stats();
+                ImGui::TextWrapped("%s", stats->status);
+                if (stats->active) {
+                    ImGui::Text("%u faces | %u triangles | %d actors | %.2f ms", stats->faces, stats->triangles, stats->actors, stats->compose_ms);
+                    ImGui::Text("Frame/map agreement: %.0f%% | mesh rebuilds: %u", stats->frame_agreement * 100, stats->rebuilds);
+                }
+                ImGui::TextWrapped("%s", stats->profile_status);
+                ImGui::TextWrapped("Optional voxel_profiles.txt, beside config.ini, specifies exact room/tile heights, rails, roofs and stairs. Default heights are topology-based estimates; collision footprints are read from the game.");
+                if (ImGui::Button("Reload shape profiles")) voxelizer_reload_profiles();
+                static const char* voxel_dump_status = "";
+                if (ImGui::Button("Export current 3D scene diagnostics")) {
+                    voxel_dump_status = voxelizer_dump_scene() ? "View, map and collision CSV saved beside config.ini." : "No active scene, or output could not be written.";
+                }
+                ImGui::TextWrapped("%s", voxel_dump_status);
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
@@ -3232,9 +3284,11 @@ upload_processed_frame:
                 }
                 if (ImGui::Button("Reload from config.ini", ImVec2(280.0f * ui_scale, 36.0f * ui_scale))) {
                     config_load_ini(NULL);
+                    voxelizer_sync_config();
                 }
                 if (ImGui::Button("Reset All to Defaults", ImVec2(280.0f * ui_scale, 36.0f * ui_scale))) {
                     config_set_defaults(&g_app_config);
+                    voxelizer_sync_config();
                     config_save_ini(NULL);
                 }
 
@@ -3802,7 +3856,7 @@ static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t fram
 static bool vita_async_render_can_use(void) {
     const int target_w = widescreen_get_target_width();
     const int target_h = widescreen_get_target_height();
-    if (g_benchmark_mode || g_app_suspended || !g_renderer || !g_texture ||
+    if (g_app_config.voxelizer_enabled || g_benchmark_mode || g_app_suspended || !g_renderer || !g_texture ||
         g_renderer_reset_pending ||
         g_texture_width != target_w || g_texture_height != target_h ||
         g_palette_idx != 0 ||
@@ -3827,6 +3881,7 @@ void gb_platform_shutdown(void) {
     vita_async_render_shutdown();
     vita_gpu_effects_shutdown();
 #endif
+    voxelizer_shutdown();
     hd_pack_shutdown();
     music_pack_shutdown();
     close_input_record_file();
@@ -5195,6 +5250,7 @@ static bool load_savestate_slot(GBContext* ctx, int slot) {
     sdl_get_savestate_path(filename, sizeof(filename), ctx, slot);
     const bool success = gb_context_load_state_file(ctx, filename);
     if (success) {
+        voxelizer_reset();
         reset_audio_output_buffer(true);
         g_last_guest_framebuffer_valid = false;
         g_present_count = ctx->completed_frames;
@@ -5451,6 +5507,7 @@ static bool sdl_save_rtc_data(GBContext* ctx, const char* rom_name, const void* 
 }
 
 void gb_platform_register_context(GBContext* ctx) {
+    voxelizer_reset();
     g_registered_ctx = ctx;
     GBPlatformCallbacks callbacks = {
         .on_audio_sample = on_audio_sample,

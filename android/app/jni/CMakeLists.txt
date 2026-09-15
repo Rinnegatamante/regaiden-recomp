@@ -30,6 +30,11 @@ add_library(main SHARED
     ${RECOMPILED_CHUNKS}
     ${RECOMPILED_FUNCS}
     ${RECOMPILED_DIR}/widescreen_ppu.c
+    ${RECOMPILED_DIR}/voxelizer.cpp
+    ${RECOMPILED_DIR}/voxel/gaiden_map.cpp
+    ${RECOMPILED_DIR}/voxel/profiles.cpp
+    ${RECOMPILED_DIR}/voxel/rasterizer.cpp
+    ${RECOMPILED_DIR}/voxel/scene.cpp
     ${RECOMPILED_DIR}/state_dump.c
     ${RECOMPILED_DIR}/music_pack.c
     ${RECOMPILED_DIR}/lighting.c
@@ -62,6 +67,7 @@ add_library(main SHARED
 
 target_compile_definitions(main PRIVATE
     GB_HAS_SDL2=1
+    GBRECOMP_VOXELIZER=1
     __ANDROID__=1
 )
 

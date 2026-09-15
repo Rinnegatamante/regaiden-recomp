@@ -45,6 +45,20 @@ void config_set_defaults(AppConfig* cfg) {
     cfg->palette_idx = 0;
     cfg->orientation_lock = 0; // 0=Auto (Sensor), 1=Landscape, 2=Portrait
 
+    cfg->voxelizer_enabled = false;
+#ifdef __VITA__
+    cfg->voxelizer_quality = 0;
+#else
+    cfg->voxelizer_quality = 1;
+#endif
+    cfg->voxelizer_pitch = 55;
+    cfg->voxelizer_yaw = -12;
+    cfg->voxelizer_zoom = 110;
+    cfg->voxelizer_wall_height = 28;
+    cfg->voxelizer_prop_height = 10;
+    cfg->voxelizer_shadows = true;
+    cfg->voxelizer_cutaway = true;
+
     // [Lighting]
     cfg->flashlight_enabled = false;
     cfg->flashlight_intensity = 85;
@@ -155,6 +169,16 @@ bool config_load_ini(const char* file_path) {
             else if (strcmp(key, "vsync") == 0) g_app_config.vsync = (atoi(val) != 0 || strcmp(val, "true") == 0);
             else if (strcmp(key, "palette_idx") == 0) g_app_config.palette_idx = atoi(val);
             else if (strcmp(key, "orientation_lock") == 0) g_app_config.orientation_lock = atoi(val);
+        } else if (strcmp(section, "Voxelizer") == 0) {
+            if (strcmp(key, "enabled") == 0) g_app_config.voxelizer_enabled = (atoi(val) != 0 || strcmp(val, "true") == 0);
+            else if (strcmp(key, "quality") == 0) g_app_config.voxelizer_quality = atoi(val);
+            else if (strcmp(key, "pitch") == 0) g_app_config.voxelizer_pitch = atoi(val);
+            else if (strcmp(key, "yaw") == 0) g_app_config.voxelizer_yaw = atoi(val);
+            else if (strcmp(key, "zoom") == 0) g_app_config.voxelizer_zoom = atoi(val);
+            else if (strcmp(key, "wall_height") == 0) g_app_config.voxelizer_wall_height = atoi(val);
+            else if (strcmp(key, "prop_height") == 0) g_app_config.voxelizer_prop_height = atoi(val);
+            else if (strcmp(key, "shadows") == 0) g_app_config.voxelizer_shadows = (atoi(val) != 0 || strcmp(val, "true") == 0);
+            else if (strcmp(key, "cutaway") == 0) g_app_config.voxelizer_cutaway = (atoi(val) != 0 || strcmp(val, "true") == 0);
         } else if (strcmp(section, "Lighting") == 0) {
             if (strcmp(key, "flashlight_enabled") == 0) g_app_config.flashlight_enabled = (atoi(val) != 0 || strcmp(val, "true") == 0);
             else if (strcmp(key, "flashlight_intensity") == 0) g_app_config.flashlight_intensity = atoi(val);
@@ -244,6 +268,17 @@ bool config_save_ini(const char* file_path) {
     fprintf(f, "vsync=%d\n", g_app_config.vsync ? 1 : 0);
     fprintf(f, "palette_idx=%d\n", g_app_config.palette_idx);
     fprintf(f, "orientation_lock=%d\n\n", g_app_config.orientation_lock);
+
+    fprintf(f, "[Voxelizer]\n");
+    fprintf(f, "enabled=%d\n", g_app_config.voxelizer_enabled ? 1 : 0);
+    fprintf(f, "quality=%d\n", g_app_config.voxelizer_quality);
+    fprintf(f, "pitch=%d\n", g_app_config.voxelizer_pitch);
+    fprintf(f, "yaw=%d\n", g_app_config.voxelizer_yaw);
+    fprintf(f, "zoom=%d\n", g_app_config.voxelizer_zoom);
+    fprintf(f, "wall_height=%d\n", g_app_config.voxelizer_wall_height);
+    fprintf(f, "prop_height=%d\n", g_app_config.voxelizer_prop_height);
+    fprintf(f, "shadows=%d\n", g_app_config.voxelizer_shadows ? 1 : 0);
+    fprintf(f, "cutaway=%d\n\n", g_app_config.voxelizer_cutaway ? 1 : 0);
 
     fprintf(f, "[Lighting]\n");
     fprintf(f, "flashlight_enabled=%d\n", g_app_config.flashlight_enabled ? 1 : 0);

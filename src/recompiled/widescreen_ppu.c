@@ -1,6 +1,7 @@
 #include "widescreen_ppu.h"
 #include "ppu.h"
 #include "game_state.h"
+#include "voxelizer.h"
 #include <string.h>
 
 uint32_t g_wide_framebuffer[GB_MAX_FRAMEBUFFER_SIZE];
@@ -20,7 +21,7 @@ static uint16_t read_guest_u16(GBContext* ctx, uint16_t addr) {
 }
 
 void widescreen_entity_frame_begin(GBContext* ctx) {
-    (void)ctx;
+    if (g_voxelizer_capture_enabled) voxelizer_entity_frame_begin(ctx);
     memset(s_wide_oam_x, 0, sizeof(s_wide_oam_x));
     s_capture_active = false;
 }
@@ -37,6 +38,7 @@ bool widescreen_entity_should_extend_x(int16_t relative_x) {
 }
 
 void widescreen_entity_capture_begin(GBContext* ctx, uint8_t entity_page) {
+    if (g_voxelizer_capture_enabled) voxelizer_entity_capture_begin(ctx, entity_page);
     s_capture_active = false;
     if (!ctx || !ctx->wram || widescreen_get_target_width() <= GB_NATIVE_WIDTH ||
         entity_page < 0xD0u || entity_page > 0xDFu) {
@@ -53,6 +55,7 @@ void widescreen_entity_capture_begin(GBContext* ctx, uint8_t entity_page) {
 }
 
 void widescreen_entity_capture_end(GBContext* ctx) {
+    if (g_voxelizer_capture_enabled) voxelizer_entity_capture_end(ctx);
     if (!s_capture_active || !ctx || !ctx->wram) {
         s_capture_active = false;
         return;

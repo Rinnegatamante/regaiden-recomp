@@ -40,3 +40,19 @@ Configuration, saves, savestates, optional `hd_pack/`, and optional
 
 The front touch screen exposes the settings icon. Physical Vita controls are
 handled through SDL's game-controller mapping.
+
+## Optional voxelizer
+
+Open the settings icon, select **Voxelizer 3D**, and enable voxelized exploration.
+**Performance (320x180)** is the Vita default; **Detailed (480x272)** is also
+available. Camera angle, rotation, zoom, wall/object heights, shadows and
+foreground cutaways are adjustable in the same tab. The original 2D display is
+unchanged when the feature is disabled.
+
+Optional `voxel_profiles.txt` belongs in `ux0:/data/regaiden/`, beside `config.ini`.
+Scene diagnostic exports are written there as well. The voxel renderer uses a
+bounded host-side software depth buffer and the existing SDL texture path; it
+does not require a differently configured vitaGL library. The older asynchronous
+2D-effects presentation path is drained and bypassed while voxelization is enabled.
+
+See [VOXELIZER.md](VOXELIZER.md) for the profile format, checks and limitations.

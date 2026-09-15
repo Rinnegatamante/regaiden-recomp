@@ -82,6 +82,11 @@ add_library(gbrt STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/config_ini.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cheats.c
     ${CMAKE_CURRENT_SOURCE_DIR}/widescreen_ppu.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/voxelizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/voxel/gaiden_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/voxel/profiles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/voxel/rasterizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/voxel/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/state_dump.c
     ${CMAKE_CURRENT_SOURCE_DIR}/music_pack.c
     ${CMAKE_CURRENT_SOURCE_DIR}/lighting.c
@@ -106,7 +111,7 @@ target_include_directories(gbrt PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(gbrt PUBLIC SDL2::SDL2)
-target_compile_definitions(gbrt PUBLIC GB_HAS_SDL2)
+target_compile_definitions(gbrt PUBLIC GB_HAS_SDL2 GBRECOMP_VOXELIZER)
 
 if(VITA)
     target_link_libraries(gbrt PUBLIC
@@ -835,6 +840,8 @@ if(WIN32)
     target_link_libraries(Resident_Evil_Gaiden__USA_ comdlg32)
     if(MSVC)
         target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE /STACK:67108864,67108864)
+    elseif(MINGW)
+        target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE -Wl,--stack,67108864)
     else()
         target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE -Wl,/STACK:67108864)
     endif()

@@ -1,0 +1,25 @@
+# Resident Evil Gaiden voxel profile syntax examples.
+# Copy to voxel_profiles.txt beside config.ini, then use Reload shape profiles.
+# On Vita: ux0:/data/regaiden/voxel_profiles.txt
+# These IDs/coordinates are examples, NOT verified presets for real game rooms.
+# All examples remain commented so this file cannot change an actual room.
+#
+# tile ROOM_OR_STAR METATILE SHAPE HEIGHT
+# tile_fill ROOM_OR_STAR METATILE SHAPE HEIGHT
+# rect ROOM_OR_STAR X Y WIDTH DEPTH SHAPE HEIGHT
+#
+# tile 0x01 0x12 wall 28
+# tile 0x01 0x13 prop 10
+# tile 0x01 0x14 rail 14
+# tile 0x01 0x15 flat 0
+# tile_fill 0x01 0x16 wall 28
+# rect 0x01 48 32 64 48 roof_x 40
+# rect 0x01 144 176 32 32 stairs_n 16
+# rect 0x01 144 144 32 32 platform 16
+#
+# Tile rules preserve existing collision footprints. Tile_fill and rect rules
+# explicitly add/remove geometry on visible pixels without changing physics.
+# Tile_fill follows changes to the metatile ID. Later rules take precedence.
+# Only stairs/platforms lift actors, where the original collision is walkable.
+# Use the in-game scene diagnostic CSV to identify actual room/metatile IDs.
+# See docs/VOXELIZER.md for supported shapes, bounds and validation limitations.

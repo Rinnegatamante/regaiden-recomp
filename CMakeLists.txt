@@ -15,7 +15,11 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/SDL2-2.30.12")
 endif()
 
 if(WIN32)
-    add_link_options(-Wl,/STACK:67108864)
+    if(MINGW)
+        add_link_options(-Wl,--stack,67108864)
+    else()
+        add_link_options(-Wl,/STACK:67108864)
+    endif()
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 

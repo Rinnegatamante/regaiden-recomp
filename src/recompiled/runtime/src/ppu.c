@@ -6,6 +6,12 @@
 #include "ppu.h"
 #include "gbrt.h"
 #include "gbrt_debug.h"
+#ifdef GBRECOMP_VOXELIZER
+#include "voxelizer.h"
+#define CAPTURE_VOXEL_SPAN(ctx, ppu, count) do { if (g_voxelizer_capture_enabled) voxelizer_capture_span(ctx, (ppu)->draw_x, (ppu)->ly, count, (ppu)->window_active_line); } while (0)
+#else
+#define CAPTURE_VOXEL_SPAN(ctx, ppu, count) ((void)0)
+#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -1592,6 +1598,7 @@ static uint32_t ppu_draw_stable_span(GBPPU* ppu,
         ppu_draw_stable_span_limit(ppu, ctx, available_dots);
     if (span == 0u) return 0u;
 
+    CAPTURE_VOXEL_SPAN(ctx, ppu, span);
     ppu_render_background_span(ppu, ctx, span);
     ppu->draw_x = (uint16_t)(ppu->draw_x + span);
     if (ppu->window_active_line) {
@@ -1619,6 +1626,7 @@ static bool ppu_draw_one_dot(GBPPU* ppu, GBContext* ctx) {
         return false;
     }
 
+    CAPTURE_VOXEL_SPAN(ctx, ppu, 1);
     ppu_render_dot(ppu, ctx);
     ppu->draw_x++;
     if (ppu->window_active_line) {
@@ -1871,6 +1879,7 @@ void ppu_tick(GBPPU* ppu, GBContext* ctx, uint32_t cycles) {
                 const uint32_t sprite_span =
                     ppu_composited_sprite_span_limit(ppu, ctx, cycles);
                 if (sprite_span > 0u) {
+                    CAPTURE_VOXEL_SPAN(ctx, ppu, sprite_span);
                     ppu_render_composited_sprite_span(ppu, ctx, sprite_span);
                     ppu->draw_x = (uint16_t)(ppu->draw_x + sprite_span);
                     if (ppu->window_active_line) {

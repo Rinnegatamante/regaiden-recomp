@@ -14,6 +14,19 @@ Running directly on native hardware without CPU emulation overhead, this project
 
 > **Note on defaults:** the game boots looking like an unmodified Game Boy Color - native 10:9 aspect, native GBC colours, no shaders, no flashlight, no HD pack. Every enhancement below is opt-in or configurable from the in-game menu (`F10`), and your choices are saved to `config.ini`.
 
+## Optional voxelized 3D exploration
+
+The **Voxelizer 3D** settings tab enables a perspective, depth-buffered renderer
+for exploration. It builds geometry from the game's pixel-accurate collision
+masks, keeps the original pixel art, and draws standing, thickened metasprites,
+directional shadows and foreground-wall cutaways. Native 2D remains the default.
+
+Collision footprints are decoded from the game; automatic wall/object heights
+are estimates. Optional room/tile profiles provide explicit heights, roofs,
+rails and stairs. The implementation has synthetic regression fixtures, but
+room-specific art and Vita performance still require validation with the game.
+See [Voxelizer usage, profiles and diagnostics](docs/VOXELIZER.md).
+
 ## Highlights & Features
 
 ### 1. Configurable Dash / Sprint System (Windows & Android)

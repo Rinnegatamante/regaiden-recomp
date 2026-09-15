@@ -10,6 +10,9 @@
 #include <string.h>
 #include <time.h>
 #include "gbrt_debug.h"
+#ifdef GBRECOMP_VOXELIZER
+#include "voxelizer.h"
+#endif
 #ifdef GBRT_ENABLE_NATIVE_PATCHES
 #include "gbrt_native_patch_internal.h"
 #endif
@@ -5024,6 +5027,9 @@ static void gb_dma_advance_active(GBContext* ctx, uint32_t cycles) {
         /* Check if DMA is complete */
         if (ctx->dma.progress >= 160 || ctx->dma.cycles_remaining == 0) {
             ctx->dma.active = 0;
+#ifdef GBRECOMP_VOXELIZER
+            if (g_voxelizer_capture_enabled) voxelizer_oam_dma_complete(ctx);
+#endif
         }
     }
 }

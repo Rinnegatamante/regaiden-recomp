@@ -26,6 +26,17 @@ typedef struct {
     int palette_idx;
     int orientation_lock;       // 0=Auto (Sensor), 1=Lock Landscape, 2=Lock Portrait
 
+    // [Voxelizer]
+    bool voxelizer_enabled;
+    int voxelizer_quality;      // 0=320x180, 1=480x272
+    int voxelizer_pitch;
+    int voxelizer_yaw;
+    int voxelizer_zoom;
+    int voxelizer_wall_height;
+    int voxelizer_prop_height;
+    bool voxelizer_shadows;
+    bool voxelizer_cutaway;
+
     // [Lighting]
     bool flashlight_enabled;
     int flashlight_intensity;   // 0 - 100
