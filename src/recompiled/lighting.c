@@ -1,5 +1,6 @@
 #include "lighting.h"
 #include "game_state.h"
+#include "widescreen_ppu.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,7 @@ static PlayerFacingDir s_player_dir = DIR_DOWN;
 static uint32_t s_frame_counter = 0;
 
 // Precompute player-relative light falloff once; a 501x501 LUT covers the 250px maximum beam reach.
-#define LUT_MAX_W 336
+#define LUT_MAX_W 256
 #define LUT_MAX_H 144
 #define LIGHT_LUT_RADIUS 250
 #define LIGHT_LUT_SIZE (LIGHT_LUT_RADIUS * 2 + 1)
@@ -97,7 +98,10 @@ bool lighting_get_player_screen_position(GBContext* ctx, int width, int height,
 
     const int native_x = (int)(int16_t)(focus_x - camera_x);
     const int native_y = (int)(int16_t)(focus_y - camera_y);
-    const int wide_offset = (width - 160) / 2;
+    int wide_offset = (width - 160) / 2;
+    if (width == GB_WIDESCREEN_WIDTH && g_app_config.widescreen_mode == ASPECT_WIDESCREEN_16_9) {
+        wide_offset += GB_WIDESCREEN_SIDE_BAND_WIDTH;
+    }
 
     // Fall back to the centered light if camera state is stale during a screen transition.
     if (native_x < -32 || native_x > 192 || native_y < -32 || native_y > 176) {

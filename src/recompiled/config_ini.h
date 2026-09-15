@@ -10,10 +10,9 @@ extern "C" {
 #endif
 
 typedef enum {
-    ASPECT_NATIVE_10_9 = 0,     // Original 160x144 Game Boy Color display
-    ASPECT_WIDESCREEN_16_9 = 1, // True 16:9 Widescreen (256x144 - 32x18 tiles)
-    ASPECT_ULTRAWIDE_21_9 = 2,  // True 21:9 Ultrawide (336x144 - 42x18 tiles)
-    ASPECT_MODE_COUNT = 3
+    ASPECT_NATIVE_10_9 = 0,
+    ASPECT_WIDESCREEN_16_9 = 1,
+    ASPECT_MODE_COUNT = 2
 } WidescreenMode;
 
 typedef struct {

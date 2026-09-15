@@ -2036,6 +2036,22 @@ static int round_to_int(double value) {
     return (int)(value + 0.5);
 }
 
+static void mask_widescreen_side_bands(void) {
+    if (!g_renderer || g_app_config.widescreen_mode != ASPECT_WIDESCREEN_16_9) return;
+    if (g_game_viewport.w <= 0 || g_game_viewport.h <= 0 || GB_WIDESCREEN_SIDE_BAND_WIDTH <= 0) return;
+
+    const int band_w = (g_game_viewport.w * GB_WIDESCREEN_SIDE_BAND_WIDTH + GB_WIDESCREEN_WIDTH - 1) / GB_WIDESCREEN_WIDTH;
+    SDL_Rect left = { g_game_viewport.x, g_game_viewport.y, band_w, g_game_viewport.h };
+    SDL_Rect right = { g_game_viewport.x + g_game_viewport.w - band_w, g_game_viewport.y, band_w, g_game_viewport.h };
+    SDL_BlendMode old_blend = SDL_BLENDMODE_NONE;
+    SDL_GetRenderDrawBlendMode(g_renderer, &old_blend);
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
+    SDL_RenderFillRect(g_renderer, &left);
+    SDL_RenderFillRect(g_renderer, &right);
+    SDL_SetRenderDrawBlendMode(g_renderer, old_blend);
+}
+
 static void update_render_filter(void) {
     if (!g_renderer) {
         return;
@@ -2672,6 +2688,7 @@ upload_processed_frame:
         SDL_GetRendererOutputSize(g_renderer, &render_output_w, &render_output_h);
     }
     touch_overlay_render(g_renderer, render_output_w, render_output_h);
+    mask_widescreen_side_bands();
 
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
@@ -2775,8 +2792,7 @@ upload_processed_frame:
                 ImGui::Spacing();
                 const char* aspect_names[] = {
                     "Native 10:9 (160x144)",
-                    "True Widescreen 16:9 (256x144 - 32x18 tiles)",
-                    "True Ultrawide 21:9 (336x144 - 42x18 tiles)"
+                    "Widescreen 16:9"
                 };
                 int current_wide = g_app_config.widescreen_mode;
                 if (ImGui::Combo("Display Mode", &current_wide, aspect_names, IM_ARRAYSIZE(aspect_names))) {
@@ -2785,7 +2801,7 @@ upload_processed_frame:
                     update_game_viewport();
                     config_save_ini(NULL);
                 }
-                ImGui::TextWrapped("True Widescreen expands the top-down exploration viewport from 160 to 256 pixels, eliminating camera crunch and allowing you to see enemies down ship corridors without stretching.");
+                ImGui::TextWrapped("Widescreen keeps the original 256x144 expanded view, removes the known-bad rightmost 24px, and centers the remaining 232px with 12px side bands.");
                 const char* orientation_modes[] = {
                     "Auto (Sensor / Dynamic)",
                     "Lock to Landscape",
@@ -4093,7 +4109,6 @@ bool gb_platform_init(int scale) {
 #if defined(__VITA__)
     g_fullscreen = true;
     g_app_config.fullscreen = true;
-    g_app_config.widescreen_mode = ASPECT_NATIVE_10_9;
     g_render_scaling_mode = GB_RENDER_SCALING_ASPECT_FIT;
     g_app_config.scaling_mode = GB_RENDER_SCALING_ASPECT_FIT;
     g_render_filter_mode = GB_RENDER_FILTER_NEAREST;

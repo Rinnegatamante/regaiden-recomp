@@ -16,7 +16,7 @@ PostProcessConfig g_postprocess_config = {
     .color_grade = COLOR_GRADE_OFF
 };
 
-#define VIG_LUT_MAX_W 336
+#define VIG_LUT_MAX_W 256
 #define VIG_LUT_MAX_H 144
 static uint8_t s_vignette_lut[VIG_LUT_MAX_H][VIG_LUT_MAX_W];
 static int s_vig_w = 0;

@@ -147,7 +147,7 @@ bool config_load_ini(const char* file_path) {
         char* val = trim_whitespace(eq + 1);
 
         if (strcmp(section, "Display") == 0) {
-            if (strcmp(key, "widescreen_mode") == 0) g_app_config.widescreen_mode = atoi(val);
+            if (strcmp(key, "widescreen_mode") == 0) g_app_config.widescreen_mode = atoi(val) <= 0 ? ASPECT_NATIVE_10_9 : ASPECT_WIDESCREEN_16_9;
             else if (strcmp(key, "scaling_mode") == 0) g_app_config.scaling_mode = atoi(val);
             else if (strcmp(key, "filter_mode") == 0) g_app_config.filter_mode = atoi(val);
             else if (strcmp(key, "fullscreen") == 0) g_app_config.fullscreen = (atoi(val) != 0 || strcmp(val, "true") == 0);
