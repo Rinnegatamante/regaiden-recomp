@@ -3620,6 +3620,8 @@ struct VitaAsyncRenderSlot {
     int width;
     int height;
     bool light_mask_active;
+    bool light_mask_dirty;
+    uint64_t light_signature;
     uint32_t frame_number;
     uint64_t sequence;
     VitaAsyncRenderSlotState state;
@@ -3633,6 +3635,7 @@ static SDL_cond* g_vita_async_render_work_cond = NULL;
 static SDL_cond* g_vita_async_render_free_cond = NULL;
 static bool g_vita_async_render_stop = false;
 static uint64_t g_vita_async_render_next_sequence = 1;
+static uint64_t g_vita_async_light_built_signature = 0;
 static GBPlatformTimingInfo g_vita_async_last_render_timing = {};
 
 static bool vita_async_render_all_slots_free(void) {
@@ -3696,9 +3699,14 @@ static int vita_async_render_worker(void*) {
         if (slot.light_mask_active &&
             vita_gpu_ensure_effect_texture(&g_vita_light_mod_texture, &g_vita_light_mod_w,
                                            &g_vita_light_mod_h, slot.width, slot.height, SDL_BLENDMODE_MOD)) {
-            SDL_UpdateTexture(g_vita_light_mod_texture, NULL, slot.light_mask,
-                              slot.width * (int)sizeof(uint32_t));
-            SDL_RenderCopy(g_renderer, g_vita_light_mod_texture, NULL, &g_game_viewport);
+            if (slot.light_mask_dirty) {
+                SDL_UpdateTexture(g_vita_light_mod_texture, NULL, slot.light_mask,
+                                  slot.width * (int)sizeof(uint32_t));
+                g_vita_light_signature = slot.light_signature;
+            }
+            if (g_vita_light_signature == slot.light_signature) {
+                SDL_RenderCopy(g_renderer, g_vita_light_mod_texture, NULL, &g_game_viewport);
+            }
         }
         vita_gpu_effects_render(NULL, slot.width, slot.height, slot.frame_number);
         vita_item_sparkles_render(slot.sparkles);
@@ -3743,6 +3751,7 @@ static bool vita_async_render_start(void) {
     }
     g_vita_async_render_stop = false;
     g_vita_async_render_next_sequence = 1;
+    g_vita_async_light_built_signature = 0;
     g_vita_async_last_render_timing = {};
     g_vita_async_render_thread = SDL_CreateThread(vita_async_render_worker, "VitaRender", NULL);
     if (!g_vita_async_render_thread) {
@@ -3818,9 +3827,21 @@ static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t fram
 
     slot.width = render_w;
     slot.height = render_h;
-    slot.light_mask_active = g_registered_ctx
-        ? lighting_build_modulation_mask(g_registered_ctx, slot.light_mask, render_w, render_h)
-        : false;
+    slot.light_mask_active = g_registered_ctx && lighting_is_active(g_registered_ctx);
+    slot.light_mask_dirty = false;
+    slot.light_signature = 0;
+    if (slot.light_mask_active) {
+        slot.light_signature = vita_gpu_light_signature(g_registered_ctx, render_w, render_h);
+        if (slot.light_signature != g_vita_async_light_built_signature) {
+            slot.light_mask_dirty = lighting_build_modulation_mask(
+                g_registered_ctx, slot.light_mask, render_w, render_h);
+            if (slot.light_mask_dirty) {
+                g_vita_async_light_built_signature = slot.light_signature;
+            } else {
+                slot.light_mask_active = false;
+            }
+        }
+    }
     slot.frame_number = frame_number;
     item_sparkles_build_frame(g_registered_ctx, render_w, render_h, &slot.sparkles);
 
