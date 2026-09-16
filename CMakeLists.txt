@@ -37,13 +37,26 @@ if(VITA)
         "${CMAKE_CURRENT_BINARY_DIR}/src/recompiled/Resident_Evil_Gaiden__USA_")
     vita_create_self(eboot.bin "${REGAIDEN_VITA_ELF}" NOASLR)
     add_dependencies(eboot.bin-self Resident_Evil_Gaiden__USA_)
+
+    set(REGAIDEN_VITA_VPK_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/config.default.ini" "config.default.ini")
+    file(GLOB_RECURSE REGAIDEN_VITA_SCE_SYS_FILES
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/*")
+    foreach(asset IN LISTS REGAIDEN_VITA_SCE_SYS_FILES)
+        list(APPEND REGAIDEN_VITA_VPK_FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/${asset}" "${asset}")
+    endforeach()
+
     vita_create_vpk(
         ResidentEvilGaiden.vpk
         "${REGAIDEN_VITA_TITLE_ID}"
         eboot.bin
         VERSION "${REGAIDEN_VITA_VERSION}"
         NAME "${REGAIDEN_VITA_APP_NAME}"
-        FILE "${CMAKE_CURRENT_SOURCE_DIR}/config.default.ini" "config.default.ini"
+        FILE ${REGAIDEN_VITA_VPK_FILES}
     )
     add_dependencies(ResidentEvilGaiden.vpk-vpk eboot.bin-self)
 endif()
