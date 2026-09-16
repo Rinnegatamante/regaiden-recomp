@@ -1,296 +1,200 @@
-# Resident Evil Gaiden: Recompiled (PC / Native)
+# Resident Evil Gaiden: Recompiled (PS Vita)
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android%20(ARM64)%20%7C%20Linux%20(WIP)-blue.svg)]()
-[![C++](https://img.shields.io/badge/Language-C11%20%2F%20C%2B%2B20-orange.svg)]()
-[![Backend](https://img.shields.io/badge/Graphics-SDL2%20%7C%20Dear%20ImGui%20%7C%20GLES3-green.svg)]()
-[![Release](https://img.shields.io/badge/Release-v0.4.0-red.svg)]()
-[![License](https://img.shields.io/badge/License-MIT-purple.svg)]()
+A native static recompilation of **Resident Evil Gaiden** (Game Boy Color, 2001) for PlayStation Vita, built in C/C++ on top of SDL2 and Dear ImGui.
 
-A native static recompilation of **Resident Evil Gaiden** (Game Boy Color, 2001) for modern PC and Android platforms, built in C/C++ with hardware-accelerated SDL2, OpenGLES 3, and Dear ImGui.
+The Vita port runs the recompiled game code natively and adds optional enhancements including **Item Sparkles**, **Widescreen**, **Dynamic Flashlight Lighting**, **Atmospheric Post-Processing**, **Savestates**, **Cheats**, **HD Texture Packs**, and **Replacement Music Packs**.
 
-Running directly on native hardware without CPU emulation overhead, this project modernizes the classic maritime survival horror experience with **Configurable Dash / Sprint**, **True Widescreen**, **Dynamic 2D Flashlight Lighting**, **Atmospheric Horror Shaders**, **Touch Controls**, a **Verified Cheats Engine**, and an **HD Texture Pack Engine**.
+> **Default presentation:** the game starts close to the original Game Boy Color presentation: native 10:9 aspect ratio, native GBC colours, and optional visual enhancements disabled. Settings can be changed from the in-game menu with **Square** and are saved to `ux0:data/regaiden/config.ini`.
 
----
+## Features
 
-> **Note on defaults:** the game boots looking like an unmodified Game Boy Color - native 10:9 aspect, native GBC colours, no shaders, no flashlight, no HD pack. Every enhancement below is opt-in or configurable from the in-game menu (`F10`), and your choices are saved to `config.ini`.
+### Item Sparkles
+Pickable items and zombie drops can display a sparkle while they are visible, making exploration less dependent on checking every tile manually.
 
-## Highlights & Features
+### Widescreen
+The optional widescreen renderer extends the visible room horizontally beyond the original 160x144 Game Boy Color viewport while preserving the original PPU-rendered image in the centre.
 
-### 1. Configurable Dash / Sprint System (Windows & Android)
-- **Fixes Sluggish Overworld Exploration**: Addresses *Resident Evil Gaiden*'s notoriously slow walking speed by adding an optional sprint system.
-- **Context-Sensitive B-Button Dash (Enabled by default)**: Holding Game Boy **`B`** while moving with the D-Pad automatically sprints without opening the inventory. Tapping **`B`** while stationary opens the inventory screen as normal.
-- **Dedicated Dash Bindings**:
-  - **Keyboard**: Hold `Left Shift` or `Right Shift`.
-  - **Gamepad**: Hold `R1` (Right Shoulder) or `L1` (Left Shoulder).
-  - **Android Touch Screen**: Dedicated on-screen `>>` sprint button in Electric Blue positioned above the `B` button.
-- **Configurable Modes & Speeds**:
-  - `0 = Disabled (1x Walk Only)`
-  - `1 = Hold Button to Run (Default - 200% / 2x Speed)`
-  - `2 = Always Run (Whenever Moving)`
-  - Speed slider adjustable from 125% to 250% in the new **Gameplay** settings tab.
-- **Combat & Menu Safety**: Automatically deactivates in battle (ROM Bank 13/14) and menus/inventory (`gb_state_is_ui_screen`), preserving 100% original combat meter timing, hit detection, and CD audio pitch.
+- Native mode: **160x144**
+- Widescreen framebuffer: **256x144**
+- Extended entity rendering and room-edge handling
+- Vita-optimized rendering path
 
-### 2. True Widescreen & Ultrawide Viewports (16:9 & 21:9)
-- **Eliminates Camera Crunch**: Expands the horizontal exploration viewport from 20 tiles (160px) to **32 tiles (256px - 16:9)** and **42 tiles (336px - 21:9)** directly in C.
-- **Corridor Sightlines**: Look deep down the narrow corridors of the luxury ocean liner *Starlight* to spot approaching zombies before bumping into them.
-- **Aspect Ratio Modes**: Toggle seamlessly between *Native 10:9 (160×144)*, *True Widescreen 16:9 (256×144)*, and *True Ultrawide 21:9 (336×144)* at runtime.
+### Dynamic Flashlight Lighting
+Barry's flashlight can cast a directional light cone over exploration scenes.
 
-### 3. Dynamic 2D Flashlight Lighting & 2D Horror Atmosphere
-- **Real-Time Directional Flashlight**: Barry's flashlight casts a real-time directional beam of light down dark ship hallways.
-- **Directional Tracking**: Light cone automatically rotates to match Barry's movement (Up, Down, Left, Right) based on input.
-- **Ambient Darkness & Attenuation**: Unlit areas are shrouded in darkness with smooth radial distance gradients and cosine angular falloff.
-- **Halogen Bulb Jitter**: Realistic high-frequency subtle bulb flicker and warm halogen color temperature.
+- Direction follows player movement
+- Configurable flashlight intensity and ambient darkness
+- Optional light flicker
 
-### 4. Atmospheric Retro Survival Horror Shaders
-- **Vignette Lighting**: Radial corner shadow falloff for an authentic claustrophobic survival horror atmosphere.
-- **Cinematic Film Grain**: Temporal animated procedural noise simulating 90s classic survival horror film grain.
-- **CRT Scanlines & Phosphor Mask**: Alternating horizontal scanline darkening and subpixel RGB shadowmask.
-- **5 Horror Color Grading Profiles**:
-  - `Native GBC Colors`
-  - `Cold Biohazard Blue` (cool teal cast with rich shadow contrast)
-  - `Bleach Bypass Gritty` (high-contrast desaturated look)
-  - `Sepia Retro` (aged vintage horror tone)
-  - `Silent Monochrome` (classic black-and-white noir mode)
+### Atmospheric Post-Processing
+Optional effects are available from the in-game menu:
 
-### 5. HD Texture Pack & Modding Engine (`hd_pack/`)
-> **The bundled `hd_pack/` is AI slop.** It is a quick proof of concept to show the engine works, nothing more - machine-generated placeholder art that does not match the game's style and was never meant to ship as a finished look. **Please replace it.** See [Making Your Own Asset Packs](#making-your-own-asset-packs) below. If you make something good, open a PR or an issue and it can be linked from here.
+- Vignette
+- Film grain
+- CRT scanlines
+- CRT phosphor mask
+- Multiple colour-grading profiles
 
-- **Native PNG Decoder**: Embedded `stb_image` for zero-dependency high-speed image loading.
-- **Host-Resolution Compositing**: High-definition assets render at **full native monitor resolution (1080p / 4K)**:
-  - `hd_pack/backgrounds/`: HD 16:9 pre-rendered battle backgrounds (e.g. *Starlight Corridor*).
-  - `hd_pack/monsters/`: HD battle monster and zombie sprites.
-  - `hd_pack/portraits/`: HD character dialogue portraits (*Barry Burton*, *Leon S. Kennedy*, *Lucia*).
-- **Hot-Reloading**: Edit or swap PNG assets and click **"Reload HD Textures"** in the in-game menu without restarting the game.
+The Vita build uses a hardware-accelerated post-processing path for these effects.
 
-### 6. Replacement Soundtrack (`music_pack/`)
-- **Bring Your Own Music**: Drop `.ogg` or `.wav` files into `music_pack/` to replace the in-game soundtrack.
-- **Follows the Game**: Tracks are matched to the game's own music ids, so the right music plays in the right place. Any id you have not supplied keeps the original music.
-- **Sound Effects Preserved**: Game Boy music and SFX share the same four channels, so the emulated audio is *ducked* rather than muted while your music plays - gunshots, doors and menu blips still come through.
-- **No music is bundled.** Like the ROM, the files are yours to supply.
+### HD Texture Pack Support
+Optional PNG replacements can be loaded from:
 
-### 7. Built-in Cheats & GameShark Code Engine
-- **Hardware-Verified Built-in Cheats**: Re-anchored to real Game Boy Color disassembly memory addresses:
-  - **Infinite Health**: Barry (`100 HP`), Leon (`100 HP`), Lucia (`120 HP`), with poison status and counters cleared automatically.
-  - **Infinite Ammo**: Max ammo (99) for all 5 weapon ammo pools (Handgun, Shotgun, Grenade Launcher, Assault Rifle, Rocket Launcher).
-  - **Unlock All Weapons**: Grants knife, handgun, shotgun, grenade launcher, and rocket launcher in inventory bitmasks.
-  - **Infinite Items**: Sets max First Aid Sprays, Green/Red Herbs, and Kevlar Armor in inventory.
-  - **Freeze Combat Reticle / Always Perfect Hit**: Centers and locks combat reticle to target, overrides hit outcome to 0 (perfect hit), and guarantees critical hits.
-  - **One-Hit Kill in Battle**: Direct damage calculation hooks at `pc_44e3`, `loc_0d_49c2`, and `loc_0d_5f8e` + RAM clamping, defeating any zombie, creature, or the Tyrant in 1 hit.
-- **Banked GameShark Code Support**: Full support for Game Boy Color GameShark codes (`01xx` standard and `9Bxx` WRAM banked codes) with whitespace/hyphen tolerance.
-
-### 8. Multi-Slot Savestate Manager
-- **10 Dedicated Savestate Slots**: Save and load instantly via the in-game overlay menu or shortcut keys (`F5` Save, `F8` Load, `F6`/`F7` Slot change).
-- Automatic battery-backed SRAM persistence for native in-game typewriter save points.
-
-### 9. Modern Controller, Keyboard & Mobile Touch Controls
-- Full support for **XInput (Xbox)**, **PlayStation (DualShock / DualSense)**, **Retroid Pocket**, and **generic USB gamepads**.
-- **Android Virtual Touch Gamepad**: On-screen D-Pad, action buttons, dedicated `>>` sprint button, quick settings button, and controller show/hide toggle.
-- **Portrait & Landscape Adaptive Layouts** with in-game orientation locking.
-- Live in-game rebinding interface with analog stick support and rumble-ready architecture.
-
----
-
-## Platform Availability & Roadmap
-
-- [x] **Windows (x86_64)**: Fully supported with static CRT, embedded icon, and release archive (**Release v0.4.0**).
-- [x] **Android (ARM64-v8a)**: Fully supported with touch gamepad, Retroid Pocket optimization, and legal ROM onboarding (**Release v0.4.0**).
-- [ ] **Linux (x86_64 / ARM64)**: Native SDL2 + Vulkan build in active preparation.
-
----
-
-## Making Your Own Asset Packs
-
-Both asset packs are plain folders of ordinary files. Nothing is compiled in, nothing is packed into an archive - drop files in, restart or hot-reload, done. No tooling required.
-
-> **About the bundled `hd_pack/`:** it is **AI slop**. It exists purely to prove the engine works. The art is machine-generated placeholder junk that does not match the game's aesthetic, and it should not be taken as the intended look. If you have any pixel-art ability at all you will do better. Please replace it - and if you make something good, open a PR or an issue so it can be linked here for everyone.
-
-### Where the folders live
-
-| Platform | Location |
-| :--- | :--- |
-| **Windows** | `hd_pack/` and `music_pack/` next to `Resident_Evil_Gaiden__USA_.exe` |
-| **Android** | `/sdcard/Android/data/com.capcom.regaiden/files/hd_pack/` and `.../music_pack/` |
-
-Both folders (and the `hd_pack` subfolders) are created automatically the first time you run the game, so the easiest way to find them is to launch once and then look.
-
----
-
-### HD Texture Pack (`hd_pack/`)
-
-HD textures are drawn at your **monitor's** resolution, on top of the Game Boy image - so they are not limited to 160x144. A 1024x1024 PNG is perfectly reasonable.
-
+```text
+ux0:data/regaiden/hd_pack/
 ```
+
+Supported folders include:
+
+```text
 hd_pack/
   backgrounds/
-    battle.png          <- pre-rendered battle background
-    battle_0.png
   monsters/
-    zombie_0.png        <- battle monster / zombie sprites
-    monster.png
   portraits/
-    barry.png           <- character dialogue portraits
-    leon.png
-    lucia.png
 ```
 
-**Format:** PNG, RGBA. Transparency is respected, so give monsters and portraits a transparent background rather than a solid colour.
+PNG transparency is supported. HD assets can be reloaded from the in-game settings menu without restarting the game.
 
-**Sizing:** backgrounds are stretched to the whole game viewport, so match your aspect ratio (16:9 works well). Monsters and portraits are scaled proportionally to the viewport height, so square images are easiest to work with.
+The bundled/sample HD pack is only a proof of concept and is not intended to represent a finished art direction.
 
-**Matching is by filename prefix.** A background is used if its name contains `backgrounds/battle`, a monster if it contains `monsters/zombie` or `monsters/monster`, and so on. That means `battle_starlight_corridor.png` works fine - you are not limited to the exact names above.
+### Replacement Soundtrack
+Custom `.ogg` or `.wav` tracks can be placed in:
 
-**Hot-reload:** edit a PNG and press **Reload HD Textures** in the in-game menu (`F10`). No restart needed, which makes iterating on art quick.
-
-Enable the pack with **Enable HD Texture Pack** in the menu. It is off by default.
-
----
-
-### Replacement Soundtrack (`music_pack/`)
-
-```
-music_pack/
-  track_2.ogg           <- replaces the game's music id 2
-  track_10.ogg          <- replaces music id 10
-  ...
+```text
+ux0:data/regaiden/music_pack/
 ```
 
-**Formats:** `.ogg` (Ogg Vorbis) and `.wav`. OGG is strongly preferred - a three-minute WAV is about 30 MB, which adds up fast, especially on a phone. Any sample rate and channel count works; files are converted to 44.1 kHz stereo when loaded.
+Files use the naming convention:
 
-**Naming:** `track_<id>`, where `<id>` is the game's own music id. Tracks then follow the game automatically - the right music plays in the right place, and any id you have not supplied simply keeps the original Game Boy music. That means you can replace one track and leave the rest alone.
-
-**Finding the id for a piece of music:**
-
-1. Open the in-game menu (`F10` on desktop, the gear icon on Android)
-2. Enable **Enable Music Pack**
-3. Play until the music you want to replace is playing
-4. The menu shows **`Now playing: track id N`** - name your file `track_N.ogg`
-
-**Sound effects.** Game Boy music and SFX share the same four audio channels, so there is no way to mute only the music. The emulated audio is turned **down** instead, which keeps gunshots, doors and menu blips audible under your track. Two sliders control the balance:
-
-- **Music Volume** - how loud your replacement track is
-- **Game Audio While Music Plays** - how loud the original Game Boy audio stays (default 25%). Lower it for less of the original melody bleeding through; raise it to keep sound effects punchier.
-
-**Looping** is on by default, so short tracks repeat rather than falling silent.
-
----
-
-### Getting your files onto Android
-
-Everything lives in the app's external storage folder, which is reachable without root:
-
-```
-/sdcard/Android/data/com.capcom.regaiden/files/
-    hd_pack/
-    music_pack/
+```text
+track_<id>.ogg
 ```
 
-**Run the game once first** - that creates the folders.
+For example, `track_2.ogg` replaces music ID 2. Missing replacement tracks continue using the original Game Boy Color audio. The original APU audio can be ducked rather than completely muted so sound effects remain audible.
 
-- **USB from a PC:** connect the phone, set the USB mode to *File Transfer / MTP*, then browse to `Internal storage > Android > data > com.capcom.regaiden > files` and copy your `hd_pack` / `music_pack` contents in.
-- **On the device:** most file managers can reach `Android/data` directly. On Android 11+ some stock file managers restrict it - if yours does, use a manager that supports the Storage Access Framework picker, or copy the files over USB.
-- **ADB:**
-  ```bash
-  adb push music_pack/. /sdcard/Android/data/com.capcom.regaiden/files/music_pack/
-  adb push hd_pack/.    /sdcard/Android/data/com.capcom.regaiden/files/hd_pack/
-  ```
+### Cheats and GameShark Codes
+The in-game menu includes built-in cheats and support for Game Boy Color GameShark codes.
 
-After copying, either restart the game or use **Reload HD Textures** / **Reload Music Pack** in the menu.
+Built-in options include:
 
-> The same folder is also where **state snapshots** are written if you use the diagnostics button, which makes them easy to pull off the device and attach to a bug report.
+- Infinite Health
+- Infinite Ammo
+- Unlock All Weapons
+- Infinite Items
+- Freeze Combat Reticle / Perfect Hit
+- One-Hit Kill
 
----
+Banked GameShark codes are also supported, including standard `01xx` and WRAM-banked `9Bxx` codes.
+
+### Savestates and Native Saves
+The Vita port supports:
+
+- Original battery-backed game saves
+- RTC persistence
+- 10 savestate slots
+- Quick save/load shortcuts
+
+Persistent data is stored under:
+
+```text
+ux0:data/regaiden/
+```
+
+This includes `config.ini`, runtime preferences, `.sav`, `.rtc`, savestates, snapshots, and user-supplied asset packs.
+
+## Installation
+
+1. Install `ResidentEvilGaiden.vpk` on your PS Vita.
+2. Create `ux0:data/regaiden/` if it does not already exist. The application will also create its writable directories automatically when possible.
+3. Copy a legally acquired **Resident Evil Gaiden (USA)** Game Boy Color ROM to one of these paths:
+
+```text
+ux0:data/regaiden/Resident Evil Gaiden (USA).gbc
+ux0:data/regaiden/rom.gbc
+```
+
+The ROM is validated before use.
+
+Expected ROM:
+
+- **Title:** Resident Evil Gaiden (USA)
+- **Size:** `2,097,152 bytes`
+- **SHA256:** `9a97678cbd8da02c8763e977674e17f460c06ea8b73bad35c52fe6817f506d44`
 
 ## Controls
 
-### Keyboard Defaults
-| Action | Primary Key | Secondary Key |
-| :--- | :--- | :--- |
-| **Move Up** | `W` | `Up Arrow` |
-| **Move Down** | `S` | `Down Arrow` |
-| **Move Left** | `A` | `Left Arrow` |
-| **Move Right** | `D` | `Right Arrow` |
-| **A / Confirm / Shoot** | `Z` | `J` |
-| **B / Cancel / Run** | `X` | `K` (Hold while moving to Run) |
-| **Dash / Sprint (Dedicated)** | `Left Shift` | `Right Shift` |
-| **Select / Map** | `Backspace` | `Tab` |
-| **Start / Inventory** | `Enter` | - |
-| **In-Game Settings Menu** | `F10` | `Escape` |
-| **Quick Save State** | `F5` | - |
-| **Quick Load State** | `F8` | - |
-| **Previous / Next Save Slot** | `F6` | `F7` |
-| **Fast Forward** | `Tab` | - |
-| **Toggle Max Speed** | `` ` `` (backtick) | - |
-| **Toggle Mute** | `M` | - |
-| **Performance Overlay** | `F1` | - |
-| **Capture State Snapshot** | `F4` | - |
+| Action | PS Vita Control |
+| :--- | :--- |
+| Movement | D-Pad |
+| Game Boy A / Confirm / Action / Shoot | **Cross** |
+| Game Boy B / Cancel | **Circle** |
+| In-Game Settings Menu | **Square** |
+| Quick Save State | **L** |
+| Quick Load State | **R** |
+| Start / Inventory | **Start** |
+| Select / Map | **Select** |
+| Unused | **Triangle** |
 
-### Gamepad Defaults (Xbox / PlayStation)
-| Action | Xbox Button | PlayStation Button |
-| :--- | :--- | :--- |
-| **Movement** | D-Pad / Left Stick | D-Pad / Left Stick |
-| **A / Action** | `B` | `Circle` |
-| **B / Cancel** | `A` | `Cross` (Hold while moving to Run) |
-| **Dash / Sprint (Dedicated)** | `Right Shoulder (RB)` | `R1` / `L1` |
-| **Select** | `Back` / `View` | `Share` / `Select` |
-| **Start** | `Start` / `Menu` | `Options` / `Start` |
-| **In-Game Menu** | `Left Stick Click (L3)` | `L3` |
-| **Quick Save** | `X` | `Square` |
-| **Quick Load** | `Y` | `Triangle` |
-| **Fast Forward** | `Right Trigger (RT)` | `R2` |
+## Data Layout
 
-> The face buttons follow the Nintendo layout: the **right-hand** button is Game Boy `A`, so on an Xbox pad that is the `B` button. All bindings are remappable in the in-game menu. On Android, a dedicated on-screen `>>` sprint button is placed above the virtual `B` button.
+The Vita build keeps writable game data in one location:
 
----
-
-## Building from Source
-
-### Prerequisites
-- **CMake** (3.15 or newer)
-- **C/C++ Compiler**: Clang, GCC, or MSVC (Visual Studio 2022) with C11 and C++20 support
-- **Ninja** or MSBuild
-- **SDL2 Development Libraries** (included in `deps/`)
-
-### Build on Windows
-```powershell
-# Clone the repository
-git clone https://github.com/sergiomanzur/regaiden-recomp.git
-cd regaiden-recomp
-
-# Build with static CRT and package Windows release
-.\scripts\package_release.ps1 -Version "0.4.0" -SkipAndroid
+```text
+ux0:data/regaiden/
+  config.ini
+  runtime_prefs.ini
+  Resident_Evil_Gaiden__USA_.sav
+  Resident_Evil_Gaiden__USA_.rtc
+  Resident_Evil_Gaiden__USA_.state1
+  ...
+  hd_pack/
+  music_pack/
+  snapshots/
 ```
 
-### Build on Android (APK)
+Exact save filenames may depend on the active game storage ID, but all persistent Vita data is rooted under `ux0:data/regaiden/`.
+
+## Building for PS Vita
+
+### Requirements
+
+- [VitaSDK](https://vitasdk.org/)
+- CMake
+- Ninja
+- PowerShell for the provided build script
+
+Make sure the `VITASDK` environment variable points to your VitaSDK installation.
+
+From the repository root:
+
 ```powershell
-# Navigate to Android directory
-cd android
-
-# Compile ARM64-v8a debug APK
-.\gradlew assembleDebug
+.\build-vita.ps1 -BuildType Release -Jobs 12
 ```
-The resulting APK is generated at `android/app/build/outputs/apk/debug/app-debug.apk`.
 
----
+The generated package is:
 
-## ROM Compatibility & Legal Notice
+```text
+build-vita/ResidentEvilGaiden.vpk
+```
 
-This repository contains **only clean-room reverse-engineered recompilation source code, runtime wrappers, shaders, and original mod assets**. It does **NOT** contain copyrighted game ROMs, proprietary audio, or commercial Game Boy Color assets.
+The VPK builder also packages the LiveArea resources from `sce_sys/`.
 
-To play, provide a legally acquired ROM dump of:
-- **Title**: *Resident Evil Gaiden (USA)*
-- **Format**: `.gbc`
-- **Expected Size**: `2,097,152 bytes`
-- **Expected SHA256**: `9a97678cbd8da02c8763e977674e17f460c06ea8b73bad35c52fe6817f506d44`
+## ROM and Legal Notice
 
-Place `Resident Evil Gaiden (USA).gbc` in the root directory (Windows) or select it via the in-game ROM setup picker on first launch (Android / Windows).
+This repository does **not** include the commercial Resident Evil Gaiden ROM or proprietary game assets. You must provide your own legally acquired dump matching the hash listed above.
 
----
+*Resident Evil* and *Resident Evil Gaiden* are trademarks of their respective owners. This project is an independent open-source recompilation/port and is not affiliated with or endorsed by Capcom.
+
+## Credits
+
+- **Sergio Manzur (sergiomanzur)** - author of the original PC version and the original [`regaiden-recomp`](https://github.com/sergiomanzur/regaiden-recomp) project.
+- **Standard-Republic** - PS Vita LiveArea assets.
+- **VitaSDK contributors** - PS Vita toolchain and homebrew SDK.
+- **SDL2**, **Dear ImGui**, and **stb** contributors - libraries used by the port.
 
 ## License
 
-- Source code: [MIT License](LICENSE)
-- Dear ImGui: [MIT License](https://github.com/ocornut/imgui/blob/master/LICENSE.txt)
-- stb_image: [Public Domain](https://github.com/nothings/stb)
-- SDL2: [zlib License](https://www.libsdl.org/license.php)
-
-*Resident Evil* and *Resident Evil Gaiden* are registered trademarks of Capcom Co., Ltd. and Virgin Interactive. This project is an independent open-source recreation for preservation and modern enhancement purposes.
+- Project source code: [MIT License](LICENSE)
+- Dear ImGui: MIT License
+- stb: Public Domain / MIT where applicable
+- SDL2: zlib License
