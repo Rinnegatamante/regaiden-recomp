@@ -841,6 +841,23 @@ static std::string extract_path_leaf(const char* path) {
 }
 
 static std::string make_pref_storage_dir(const char* app_component) {
+#if defined(__VITA__)
+    (void)app_component;
+    const fs::path data_root("ux0:data/regaiden");
+    std::error_code ec;
+    fs::create_directories(data_root, ec);
+    if (ec) {
+        std::error_code exists_ec;
+        if (!fs::is_directory(data_root, exists_ec) || exists_ec) {
+            fprintf(stderr,
+                    "[SDL] Failed to create Vita data directory '%s': %s\n",
+                    data_root.string().c_str(),
+                    ec.message().c_str());
+            return std::string();
+        }
+    }
+    return data_root.string();
+#else
     const char* safe_component = (app_component && app_component[0]) ? app_component : "runtime";
     char* pref_path = SDL_GetPrefPath("gbrecompiled", safe_component);
     if (!pref_path) {
@@ -849,6 +866,7 @@ static std::string make_pref_storage_dir(const char* app_component) {
     std::string result(pref_path);
     SDL_free(pref_path);
     return result;
+#endif
 }
 
 static std::string resolve_writable_path(const char* requested_path, const char* app_component) {
@@ -989,8 +1007,10 @@ static void apply_vita_shortcut_bindings(void) {
         make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
     g_controller_bindings[GB_INPUT_ACTION_LOAD_STATE][1] = {};
     g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][0] =
-        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_Y);
+        make_binding(GB_INPUT_BINDING_CONTROLLER_BUTTON, SDL_CONTROLLER_BUTTON_X);
     g_controller_bindings[GB_INPUT_ACTION_TOGGLE_MENU][1] = {};
+    g_controller_bindings[GB_INPUT_ACTION_DASH][0] = {};
+    g_controller_bindings[GB_INPUT_ACTION_DASH][1] = {};
 }
 #endif
 
@@ -1055,8 +1075,8 @@ static void set_default_input_bindings(void) {
 
 /*
  * Root for player-supplied asset packs. Empty on desktop, where a path next to
- * the executable is what people expect; on Android this is external app
- * storage, the only location a file manager or USB transfer can reach.
+ * the executable is what people expect; mobile/handheld builds use their
+ * writable user-data root.
  */
 static std::string platform_external_asset_root(void) {
 #if defined(__ANDROID__)
@@ -1501,8 +1521,6 @@ static bool input_action_is_pressed(GBInputAction action) {
     return false;
 }
 
-static bool g_b_dash_active = false;
-
 static bool is_in_combat_mode(void) {
     if (!g_registered_ctx) {
         return false;
@@ -1620,10 +1638,9 @@ static void update_runtime_action_state(GBContext* ctx) {
             // Mode 2: Always Run whenever moving
             g_dash_active = is_moving;
         } else {
-            // Mode 1: Hold button to run (dedicated Dash action, Android touch dash, or classic B button)
+            // Mode 1: Hold the dedicated Dash action or Android touch dash while moving.
             const bool wants_dash = input_action_is_pressed(GB_INPUT_ACTION_DASH) ||
-                                    touch_overlay_is_dash_pressed() ||
-                                    (g_app_config.dash_button_b && g_b_dash_active);
+                                    touch_overlay_is_dash_pressed();
             g_dash_active = is_moving && wants_dash;
         }
     }
@@ -1651,23 +1668,6 @@ static void update_effective_joypad_state(void) {
     rebuild_manual_joypad_state_from_bindings();
     g_joypad_dpad = g_manual_joypad_dpad & g_script_joypad_dpad & touch_overlay_get_dpad_mask();
     g_joypad_buttons = g_manual_joypad_buttons & g_script_joypad_buttons & touch_overlay_get_buttons_mask();
-
-    // Context-sensitive B-button dash handling:
-    // When dash_button_b is enabled and moving, holding B runs rather than opening inventory.
-    if (g_app_config.dash_mode != 0 && g_app_config.dash_button_b && is_gameplay_active() && !is_in_combat_mode()) {
-        const bool is_moving = ((g_joypad_dpad & 0x0F) != 0x0F);
-        const bool b_pressed = input_action_is_pressed(GB_INPUT_ACTION_B) || ((g_joypad_buttons & 0x02) == 0);
-        if (!b_pressed) {
-            g_b_dash_active = false;
-        } else if (is_moving) {
-            g_b_dash_active = true;
-        }
-        if (g_b_dash_active) {
-            g_joypad_buttons |= 0x02; // Suppress B press so inventory menu does not open while dashing
-        }
-    } else {
-        g_b_dash_active = false;
-    }
 
     lighting_update_player_dir(g_joypad_dpad);
 }
@@ -3139,17 +3139,10 @@ upload_processed_frame:
                     config_save_ini(NULL);
                 }
 
-                // B Button Dash Option
-                if (ImGui::Checkbox("Use B Button to Run while Moving", &g_app_config.dash_button_b)) {
-                    config_save_ini(NULL);
-                }
-                ImGui::TextWrapped("When enabled, holding the Game Boy B button (Keyboard X/K, Gamepad A/L1) while moving with the D-Pad causes your character to sprint. "
-                                   "Tapping B while stationary opens the inventory menu as normal.");
-
                 ImGui::Separator();
                 ImGui::TextDisabled("Controls for Dash / Run:");
                 ImGui::BulletText("Keyboard: Hold Left Shift or Right Shift while moving");
-                ImGui::BulletText("Gamepad: Hold R1 / L1 (Shoulder) or hold B while moving");
+                ImGui::BulletText("Gamepad: Hold R1 / L1 (Shoulder) while moving");
                 ImGui::BulletText("Combat Safety: 100%% normal speed is automatically preserved during combat, menus, and cutscenes.");
 
                 ImGui::EndChild();
@@ -4748,7 +4741,7 @@ static bool handle_runtime_event(const SDL_Event* event, GBContext* ctx) {
                 if (pressed && (event->cbutton.button == SDL_CONTROLLER_BUTTON_B ||
                                 event->cbutton.button == SDL_CONTROLLER_BUTTON_BACK
 #if defined(__VITA__)
-                                || event->cbutton.button == SDL_CONTROLLER_BUTTON_Y
+                                || event->cbutton.button == SDL_CONTROLLER_BUTTON_X
 #endif
                                 )) {
                     set_menu_visible(false);
