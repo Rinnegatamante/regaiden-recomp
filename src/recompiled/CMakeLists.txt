@@ -82,6 +82,8 @@ add_library(gbrt STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/config_ini.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cheats.c
     ${CMAKE_CURRENT_SOURCE_DIR}/widescreen_ppu.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/item_sparkles.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/item_sparkles_sdl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/state_dump.c
     ${CMAKE_CURRENT_SOURCE_DIR}/music_pack.c
     ${CMAKE_CURRENT_SOURCE_DIR}/lighting.c
@@ -836,7 +838,7 @@ if(WIN32)
     if(MSVC)
         target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE /STACK:67108864,67108864)
     else()
-        target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE -Wl,/STACK:67108864)
+        target_link_options(Resident_Evil_Gaiden__USA_ PRIVATE -Wl,--stack,67108864)
     endif()
 endif()
 

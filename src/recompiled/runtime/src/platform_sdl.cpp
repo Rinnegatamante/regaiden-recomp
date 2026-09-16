@@ -40,6 +40,8 @@
 #include "config_ini.h"
 #include "cheats.h"
 #include "widescreen_ppu.h"
+#include "item_sparkles.h"
+#include "item_sparkles_sdl.h"
 #include "rom_loader.h"
 #include "lighting.h"
 #include "postprocess.h"
@@ -1452,6 +1454,7 @@ static bool recreate_streaming_texture(void);
 static void set_app_suspended(bool suspended);
 #if defined(__VITA__)
 static void vita_gpu_effects_render(GBContext* ctx, int render_w, int render_h, uint32_t frame_number);
+static void vita_item_sparkles_render(const ItemSparkleFrame& frame);
 static void vita_gpu_effects_shutdown(void);
 #endif
 
@@ -2595,6 +2598,8 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
     static bool s_processed_valid = false;
     static int s_processed_w = 0;
     static int s_processed_h = 0;
+    static bool s_processed_sparkles_enabled = false;
+    static ItemSparkleFrame s_sparkles = {};
 
     /*
      * Extra presents (smooth LCD transitions) repaint the *previous* completed
@@ -2607,7 +2612,8 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
      */
     const bool recompose =
         count_guest_frame || !s_processed_valid ||
-        s_processed_w != render_w || s_processed_h != render_h;
+        s_processed_w != render_w || s_processed_h != render_h ||
+        s_processed_sparkles_enabled != g_app_config.item_sparkles;
 
     if (!recompose) {
         goto upload_processed_frame;
@@ -2648,6 +2654,11 @@ static void render_frame_internal(const uint32_t* framebuffer, bool count_guest_
     postprocess_apply(g_registered_ctx, s_processed_framebuffer, render_w, render_h);
 #endif
 
+    item_sparkles_build_frame(g_registered_ctx, render_w, render_h, &s_sparkles);
+#if !defined(__VITA__)
+    item_sparkles_blit(&s_sparkles, s_processed_framebuffer);
+#endif
+    s_processed_sparkles_enabled = g_app_config.item_sparkles;
     s_processed_valid = true;
     s_processed_w = render_w;
     s_processed_h = render_h;
@@ -2694,6 +2705,10 @@ upload_processed_frame:
     if (g_registered_ctx) {
         hd_pack_render_host_overlay(g_registered_ctx, g_renderer, g_game_viewport.x, g_game_viewport.y, g_game_viewport.w, g_game_viewport.h);
     }
+
+#if defined(__VITA__)
+    vita_item_sparkles_render(s_sparkles);
+#endif
 
     /* Render virtual touch overlay controls (Android / Touchscreen) */
     int render_output_w = g_windowed_width;
@@ -3095,6 +3110,12 @@ upload_processed_frame:
                 ImGui::Spacing();
                 ImGui::Text("Quality of Life Enhancements:");
                 ImGui::Separator();
+
+                if (ImGui::Checkbox("Item Sparkles", &g_app_config.item_sparkles)) {
+                    config_save_ini(NULL);
+                }
+                ImGui::TextWrapped("Make available pickups sparkle in the visible area, including loot on defeated enemies.");
+                ImGui::Spacing();
 
                 // Dash / Run Mode
                 const char* dash_modes[] = { "Disabled (1x Walk Only)", "Hold Button to Run (Recommended)", "Always Run" };
@@ -3562,7 +3583,15 @@ static void vita_gpu_effects_render(GBContext* ctx, int render_w, int render_h, 
     vita_gpu_render_grain(render_w, render_h, frame_number);
 }
 
+static SDL_Texture* g_vita_sparkle_texture = NULL;
+
+static void vita_item_sparkles_render(const ItemSparkleFrame& frame) {
+    item_sparkles_sdl_render(g_renderer, &g_vita_sparkle_texture, &g_game_viewport, &frame);
+}
+
 static void vita_gpu_effects_shutdown(void) {
+    if (g_vita_sparkle_texture) SDL_DestroyTexture(g_vita_sparkle_texture);
+    g_vita_sparkle_texture = NULL;
     if (g_vita_light_mod_texture) SDL_DestroyTexture(g_vita_light_mod_texture);
     if (g_vita_post_mod_texture) SDL_DestroyTexture(g_vita_post_mod_texture);
     if (g_vita_grain_texture) SDL_DestroyTexture(g_vita_grain_texture);
@@ -3587,6 +3616,7 @@ enum VitaAsyncRenderSlotState {
 struct VitaAsyncRenderSlot {
     uint32_t framebuffer[GB_MAX_FRAMEBUFFER_SIZE];
     uint32_t light_mask[GB_MAX_FRAMEBUFFER_SIZE];
+    ItemSparkleFrame sparkles;
     int width;
     int height;
     bool light_mask_active;
@@ -3671,6 +3701,7 @@ static int vita_async_render_worker(void*) {
             SDL_RenderCopy(g_renderer, g_vita_light_mod_texture, NULL, &g_game_viewport);
         }
         vita_gpu_effects_render(NULL, slot.width, slot.height, slot.frame_number);
+        vita_item_sparkles_render(slot.sparkles);
         mask_widescreen_side_bands();
         timing.compose_ms = sdl_now_ms() - compose_start;
 
@@ -3791,6 +3822,7 @@ static void vita_async_render_enqueue(const uint32_t* framebuffer, uint32_t fram
         ? lighting_build_modulation_mask(g_registered_ctx, slot.light_mask, render_w, render_h)
         : false;
     slot.frame_number = frame_number;
+    item_sparkles_build_frame(g_registered_ctx, render_w, render_h, &slot.sparkles);
 
     SDL_LockMutex(g_vita_async_render_mutex);
     slot.sequence = g_vita_async_render_next_sequence++;
